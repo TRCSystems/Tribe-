@@ -28,10 +28,7 @@ public class InvoiceToInventorySyncService {
         this.inventoryRepository = inventoryRepository;
     }
 
-    /**
-     * Sync invoice data to inventory
-     * Similar to your SMS sending pattern with customer lists
-     */
+
     @Transactional
     public Map<String, Object> syncInvoiceToInventory(String merchantId, InvoiceDataDTO invoiceData) {
 

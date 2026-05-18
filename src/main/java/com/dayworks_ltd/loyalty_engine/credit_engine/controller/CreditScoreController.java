@@ -33,38 +33,6 @@ public class CreditScoreController {
     private final CreditEngineService creditEngineService;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
-//    @PostMapping("/score")
-//    public ResponseEntity<CreditScoreResponse> getCreditScore(@RequestBody MerchantIdRequest request) {
-//        String merchantId = request.getMerchantId();
-//
-//        // NEW METHOD – computes once per day, returns stored score on subsequent calls
-//        CreditScore scoreEntity = creditEngineService.getCreditScoreForToday(merchantId);
-//
-//        JsonNode breakdown = null;
-//        if (scoreEntity.getBreakdownJson() != null && !scoreEntity.getBreakdownJson().isBlank()) {
-//            try {
-//                breakdown = objectMapper.readTree(scoreEntity.getBreakdownJson());
-//            } catch (JsonProcessingException e) {
-//                breakdown = objectMapper.createObjectNode()
-//                        .put("error", "Failed to parse breakdown JSON");
-//            }
-//        }
-//
-//        var response = CreditScoreResponse.builder()
-//                .merchant_id(scoreEntity.getMerchantId())
-//                .score(scoreEntity.getScore())
-//                .grade(scoreEntity.getGrade())
-//                .is_provisional(scoreEntity.isProvisional())
-//                .calculated_on(scoreEntity.getCalculatedForDate().toString())
-//                .data_period(new DataPeriod(
-//                        scoreEntity.getDataFromDate().toString(),
-//                        scoreEntity.getDataToDate().toString()
-//                ))
-//                .breakdown(breakdown)
-//                .build();
-//
-//        return ResponseEntity.ok(response);
-//    }
 
     @PostMapping("/score")
     public ResponseEntity<?> getCreditScore(@RequestBody MerchantIdRequest request) {

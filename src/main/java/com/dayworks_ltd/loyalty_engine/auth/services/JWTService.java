@@ -25,6 +25,9 @@ public class JWTService {
     @Value("${loyalty-engine.secret-key}")
     private String secretKey;
 
+    @Value("${loyalty-engine.jwt-expiration}")
+    private long jwtExpiration;
+
     public JWTService() {
         log.info("JWTService initialized - Version: Non-Expiring Tokens (2025-10-04)");
         System.out.println("JWTService initialized - Console check");
@@ -42,6 +45,12 @@ public class JWTService {
         System.out.println("JWT Generated - User: " + user.getUsername() + ", Issued: " + issuedAt);
         System.out.println("User  ID: " + user.getUserId() + ", Issued: " + issuedAt);
 
+        String businessType = user.getBusinessType(); // null for non-merchants
+        if (businessType != null) {
+            claims.put("businessType", businessType);
+        }
+        claims.put("isWholesaler", user.getIsWholesaler());
+
         String token = builder()
                 .claims(claims)
                 .claim("id", user.getUserId())
@@ -49,9 +58,9 @@ public class JWTService {
                 .subject(user.getUsername())
                 .issuer("Loyalty-engine")
                 .issuedAt(issuedAt)
+                .expiration(new Date(currentTime + jwtExpiration))
                 .signWith(generateKey())
                 .compact();
-        log.info("Generated token: {}", token); // Remove in prod
         System.out.println("Generated token: " + token);
         return token;
     }
@@ -97,26 +106,39 @@ public class JWTService {
     }
 
 
+
     public boolean isTokenExpired(String jwtToken) {
-        Date expiration = extractExpiration(jwtToken);
-        // If expiration is null, token never expires
-        if (expiration == null) {
-            return false;
-        }
-        return expiration.before(new Date());
+        return extractExpiration(jwtToken).before(new Date());
     }
+
+    private Date extractExpiration(String jwtToken) {
+        return extractClaims(jwtToken, Claims::getExpiration);
+    }
+
+
+
+
+
+//    public boolean isTokenExpired(String jwtToken) {
+//        Date expiration = extractExpiration(jwtToken);
+//        // If expiration is null, token never expires
+//        if (expiration == null) {
+//            return false;
+//        }
+//        return expiration.before(new Date());
+//    }
 
 //    public boolean isTokenExpired(String jwtToken) {
 //        Date expiration = extractExpiration(jwtToken);
 //        return expiration != null && expiration.before(new Date());
 //    }
 
-    private Date extractExpiration(String jwtToken) {
-        try {
-            return extractClaims(jwtToken, Claims::getExpiration);
-        } catch (Exception e) {
-            log.warn("No expiration claim in token: {}", e.getMessage());
-            return null; // Non-expiring token
-        }
-    }
+//    private Date extractExpiration(String jwtToken) {
+//        try {
+//            return extractClaims(jwtToken, Claims::getExpiration);
+//        } catch (Exception e) {
+//            log.warn("No expiration claim in token: {}", e.getMessage());
+//            return null; // Non-expiring token
+//        }
+//    }
 }

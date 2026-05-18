@@ -71,9 +71,11 @@ public class WebSecurityConfig {
                         .hasAnyRole(UserRole.ADMIN.name(), UserRole.MERCHANT.name(), UserRole.SALES_PERSON.name())
                         .requestMatchers("/api/v1/inventory/**")
                         .hasAnyRole(UserRole.ADMIN.name(), UserRole.MERCHANT.name(), UserRole.SALES_PERSON.name())
-
+                        .requestMatchers("/api/v1/invoices/kra/**").permitAll()
                         .requestMatchers("/api/v1/invoices/**")
+                          // ← Add this line
                         .hasAnyRole(UserRole.ADMIN.name(), UserRole.MERCHANT.name())
+
 
                         // CREDIT ENGINE – THIS IS THE LINE YOU WERE MISSING
                         .requestMatchers("/api/v1/credit/**")
@@ -116,10 +118,12 @@ public class WebSecurityConfig {
 
         config.setAllowedOrigins(List.of(
                 "http://38.242.155.236",          // production frontend (port 80 – this is the one that was missing)
-                "http://38.242.155.236:8080",     // if you serve frontend on 8080 sometimes
+                "http://38.242.155.236:8080",
+                // if you serve frontend on 8080 sometimes
                 "http://localhost:3000",
                 "http://localhost:3001",
-                "http://localhost:8080"
+                "http://localhost:8080",
+                "https://tribessystems.co.ke"
         ));
 
 //        config.setAllowedOrigins(List.of("http://localhost:3000"));

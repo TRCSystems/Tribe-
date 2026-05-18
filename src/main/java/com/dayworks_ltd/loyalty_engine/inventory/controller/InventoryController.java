@@ -1,5 +1,6 @@
 package com.dayworks_ltd.loyalty_engine.inventory.controller;
 
+import com.dayworks_ltd.loyalty_engine.auth.enums.BusinessType;
 import com.dayworks_ltd.loyalty_engine.auth.model.CustomUserDetails;
 import com.dayworks_ltd.loyalty_engine.auth.model.User;
 import com.dayworks_ltd.loyalty_engine.auth.repository.UserRepository;
@@ -102,11 +103,7 @@ public class InventoryController {
         this.defaultProductRepository = defaultProductRepository;
     }
 
-    // --- Default product templates ---
     @GetMapping("/product-defaults")
-    @Operation(summary = "Get all default products",
-            description = "Returns the list of default products available system-wide. "
-                    + "Requires authenticated user with a linked merchant.")
     public ResponseEntity<?> getAllDefaultProducts(
             @AuthenticationPrincipal CustomUserDetails customUserDetails) {
 
@@ -114,7 +111,6 @@ public class InventoryController {
 
         try {
             if (customUserDetails == null) {
-                logger.warn("No authenticated user found for /product-defaults");
                 return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(Map.of(
                         "status", "FAILURE",
                         "statusCode", 401,
@@ -122,13 +118,10 @@ public class InventoryController {
                 ));
             }
 
-            logger.info("User authenticated: {}", customUserDetails.getUsername());
-
             Long userId = customUserDetails.getUserId();
             User user = userRepository.getUserById(userId);
 
             if (user == null) {
-                logger.warn("User not found in DB for ID: {}", userId);
                 return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(Map.of(
                         "status", "FAILURE",
                         "statusCode", 401,
@@ -136,10 +129,9 @@ public class InventoryController {
                 ));
             }
 
-            String merchantId = user.getMerchantId();
+            Merchant merchant = user.getMerchant();
 
-            if (merchantId == null || merchantId.isBlank()) {
-                logger.warn("User {} has no linked merchant", user.getUsername());
+            if (merchant == null) {
                 return ResponseEntity.badRequest().body(Map.of(
                         "status", "FAILURE",
                         "statusCode", 400,
@@ -147,17 +139,11 @@ public class InventoryController {
                 ));
             }
 
-            logger.info("Fetching default products for merchant-linked user: {} (merchantId: {})",
-                    user.getUsername(), merchantId);
+            BusinessType businessType = BusinessType.valueOf(merchant.getBusinessType());
 
-            // Fetch all default products (they are system-wide, not merchant-specific)
-            List<DefaultProduct> defaultProducts = defaultProductRepository.findAll();
+            List<DefaultProduct> defaultProducts =
+                    defaultProductRepository.findByBusinessType(businessType);
 
-            if (defaultProducts.isEmpty()) {
-                logger.info("No default products found in database");
-            }
-
-            // Map to DTO
             List<DefaultProductDto> result = defaultProducts.stream()
                     .map(p -> DefaultProductDto.builder()
                             .productName(p.getProductName())
@@ -166,10 +152,6 @@ public class InventoryController {
                             .build())
                     .toList();
 
-            // Option 1: Return plain list (simple & clean)
-            // return ResponseEntity.ok(result);
-
-            // Option 2: Return consistent wrapped response (recommended to match your other endpoints)
             return ResponseEntity.ok(Map.of(
                     "status", "SUCCESS",
                     "statusCode", 200,
@@ -187,53 +169,44 @@ public class InventoryController {
             ));
         }
     }
-    
+
+
     @GetMapping("/all")
-    @Operation(summary = "Get All Inventory Items", description = "get all inventory items for specified merchant Id")
-    public ResponseEntity<?> getAllItems(@AuthenticationPrincipal CustomUserDetails customUserDetails, @RequestParam String merchantId, @RequestHeader("Authorization") String authToken) {  // ← This is actually the USER ID
+    @Operation(summary = "Get All Inventory Items with dynamic pricing")
+    public ResponseEntity<?> getAllItems(
+            @AuthenticationPrincipal CustomUserDetails customUserDetails,
+            @RequestParam String merchantId) {
 
         try {
-            List<Inventory> items = new ArrayList<Inventory>();
-            if(customUserDetails != null)
-            {
-                logger.info("User details found in controller!");
-                logger.info("{}", customUserDetails);
-
-                Long userId = customUserDetails.getUserId();
-                User user = userRepository.getUserById(userId);
-
-                logger.info( "{}", user);
-                logger.info("Resolved Merchant ID: {}", user.getMerchantId());
-                String realMerchantId = user.getMerchantId();
-
-                if (realMerchantId == null || realMerchantId.isBlank()) {
-                    return ResponseEntity.badRequest().body(Map.of(
-                            "status", "FAILURE",
-                            "statusCode", 400,
-                            "message", "This user is not linked to any merchant"
-                    ));
-                }
-
-                // Log for consistency
-                logger.info("Fetching inventory for userId: " + merchantId +
-                        " → Resolved to real merchantId: " + realMerchantId);
-
-                // === NOW FETCH USING THE REAL MERCHANT ID ===
-                items = inventoryService.getAllItemsForMerchant(realMerchantId);
+            if (customUserDetails == null) {
+                return ResponseEntity.status(401).body(Map.of("status", "FAILURE", "message", "Unauthorized"));
             }
-            else
-            {
-                logger.error("User details not found in controller!");
+
+            Long userId = customUserDetails.getUserId();
+            User user = userRepository.getUserById(userId);
+
+            if (user == null || user.getMerchantId() == null || user.getMerchantId().isBlank()) {
+                return ResponseEntity.badRequest().body(Map.of(
+                        "status", "FAILURE",
+                        "statusCode", 400,
+                        "message", "User is not linked to any merchant"
+                ));
             }
+
+            String realMerchantId = user.getMerchantId();
+
+            // Use new method that handles wholesale pricing
+            List<InventoryResponseDto> items = inventoryService
+                    .getAllItemsForMerchantWithPricing(realMerchantId,user);
 
             return ResponseEntity.ok(items);
 
         } catch (Exception e) {
-            e.printStackTrace();
+            logger.error("Error fetching inventory with pricing", e);
             return ResponseEntity.internalServerError().body(Map.of(
                     "status", "ERROR",
                     "statusCode", 500,
-                    "message", "Failed to retrieve inventory: " + e.getMessage()
+                    "message", "Failed to retrieve inventory"
             ));
         }
     }
@@ -383,29 +356,7 @@ public class InventoryController {
         return ResponseEntity.ok(inventoryService.recordDeduction(id, amount));
     }
 
-//    @PostMapping("/add-stock")
-//    @Operation(summary = "Update available stock", description = "update the available stock for a particular inventory item")
-//    public ResponseEntity<?> addStock(@RequestBody StockRequest request) {
-//        try {
-//            List<Inventory> updatedItems = inventoryService.addMultipleStock(request);
-//            return ResponseEntity.ok(Map.of(
-//                    "status", "SUCCESS",
-//                    "message", "Stock added successfully",
-//                    "data", updatedItems
-//            ));
-//        } catch (IllegalArgumentException e) {
-//            return ResponseEntity.badRequest().body(Map.of(
-//                    "status", "FAILURE",
-//                    "message", e.getMessage()
-//            ));
-//        } catch (Exception e) {
-//            return ResponseEntity.internalServerError().body(Map.of(
-//                    "status", "ERROR",
-//                    "message", "Failed to add stock",
-//                    "error", e.getMessage()
-//            ));
-//        }
-//    }
+
 
     @PostMapping("/add-stock")
     @Operation(summary = "Update available stock", description = "update the available stock for a particular inventory item")
@@ -474,24 +425,6 @@ public class InventoryController {
         }
     }
 
-//    @GetMapping("/daily-summary/{merchantId}")
-//    @Operation(summary = "Fetch daily summary", description = "Fetch the daily summary for the specified merchant")
-//    public ResponseEntity<Map<String, Object>> dailySummary(
-//            @PathVariable String merchantId,
-//            @RequestParam(required = false) String date
-//    ) {
-//        LocalDate d = (date == null ? LocalDate.now() : LocalDate.parse(date));
-//
-//        Map<String, BigDecimal> summaryData = inventoryService.getDailySummary(merchantId, d);
-//
-//        Map<String, Object> response = new LinkedHashMap<>(); // preserve insertion order
-//        response.put("status", "SUCCESS");
-//        response.put("statusCode", 200);
-//        response.put("message", "Daily summary retrieved successfully for merchant " + merchantId);
-//        response.put("data", summaryData);
-//
-//        return ResponseEntity.ok(response);
-//    }
 
     @GetMapping("/daily-summary/{merchantId}")
     @Operation(summary = "Fetch daily summary", description = "Fetch the daily summary for the specified merchant")
@@ -723,109 +656,7 @@ public class InventoryController {
             ));
         }
     }
-//    @PostMapping("/close-day")
-//    @Operation(summary = "Finalize close business day", description = "Finalize close business day only if provided OTP matches the one sent to the merchant.")
-//    public ResponseEntity<Map<String, Object>> closeDay(@RequestBody Map<String, String> request) {
-//        try {
-//            String merchantId = request.get("merchantId");
-//            String closeDayOtp = request.get("otp");
-//            if(merchantId == null || closeDayOtp == null)
-//            {
-//                return ResponseEntity.badRequest().body(Map.of(
-//                        "status", "FAILED",
-//                        "statusCode", 400,
-//                        "message", "invalid close day details"
-//                ));
-//            }
-//
-//            String generatedOtp = merchantService.getMerchantOtp(merchantId);
-//
-//            if(( generatedOtp == null || generatedOtp.isBlank())
-//                    || ( closeDayOtp == null || closeDayOtp.isBlank()) )
-//            {
-//                return ResponseEntity.badRequest().body(Map.of(
-//                        "status", "FAILED",
-//                        "statusCode", 400,
-//                        "message", "null OTP code"
-//                ));
-//            }
-//            else if(!closeDayOtp.equals(generatedOtp))
-//            {
-//                return ResponseEntity.badRequest().body(Map.of(
-//                        "status", "FAILED",
-//                        "statusCode", 400,
-//                        "message", "invalid OTP code"
-//                ));
-//            }
-//            else //actual closure of business day
-//            {
-//                LocalDate d = LocalDate.now();
-//                Map<String, BigDecimal> summaryData = inventoryService.getDailySummary(merchantId, d);
-//
-//                Optional<Merchant> merchantOptional = merchantService.getMerchantById(Long.parseLong(merchantId));
-//                ArrayList<Pair<String, String>> list = new ArrayList<Pair<String, String>>();
-//                list.add(
-//                        new Pair<String, String>(
-//                                merchantOptional.isPresent() ? merchantOptional.get().getBusinessPhone() : null,
-//                                new StringBuilder().append("Gross Sales").append(summaryData.get("grossSales"))
-//                                        .append("\nDeductions").append(summaryData.get("deductions"))
-//                                        .append("\nNet Sales").append(summaryData.get("netSales")).toString()
-//                        )
-//                );
-//                campaign.sendSMSMessage(list);
-//                merchantService.updateMerchantOtp(merchantId, "");
-//                return ResponseEntity.ok(inventoryService.closeDay(merchantId));
-//            }
-//
-//
-//        } catch (IllegalStateException e) {
-//            return ResponseEntity.badRequest().body(Map.of(
-//                    "status", "FAILED",
-//                    "statusCode", 400,
-//                    "message", e.getMessage()
-//            ));
-//        } catch (Exception e) {
-//            return ResponseEntity.internalServerError().body(Map.of(
-//                    "status", "ERROR",
-//                    "statusCode", 500,
-//                    "message", "Unexpected error while closing day: " + e.getMessage()
-//            ));
-//        }
-//    }
 
-//    @GetMapping("/weekly")
-//    @Operation(summary = "Fetch weekly summary", description = "Provide the merchant weekly sales summary")
-//    public ResponseEntity<?> getWeeklySummary(
-//            @RequestParam String merchantId,
-//            @RequestParam(required = false) String start,
-//            @RequestParam(required = false) String end
-//    ) {
-//        LocalDate endDate = end != null ? LocalDate.parse(end) : LocalDate.now();
-//        LocalDate startDate = start != null ? LocalDate.parse(start) : endDate.minusDays(6);
-//
-//        List<DailySalesSummary> summaries =
-//                dailySalesSummaryRepository.findByMerchantIdAndRecordDateBetween(merchantId, startDate, endDate);
-//
-//        BigDecimal gross = summaries.stream().map(DailySalesSummary::getGrossSales)
-//                .reduce(BigDecimal.ZERO, BigDecimal::add);
-//        BigDecimal net = summaries.stream().map(DailySalesSummary::getNetSales)
-//                .reduce(BigDecimal.ZERO, BigDecimal::add);
-//        BigDecimal deductions = summaries.stream().map(DailySalesSummary::getDeductions)
-//                .reduce(BigDecimal.ZERO, BigDecimal::add);
-//
-//        return ResponseEntity.ok(Map.of(
-//                "statusCode", 200,
-//                "status", "SUCCESS",
-//                "message", "Weekly summary retrieved successfully",
-//                "range", Map.of("start", startDate, "end", endDate),
-//                "data", Map.of(
-//                        "grossSales", gross,
-//                        "deductions", deductions,
-//                        "netSales", net,
-//                        "dailyTrend", summaries
-//                )
-//        ));
-//    }
 
     @GetMapping("/weekly")
     @Operation(summary = "Fetch weekly summary", description = "Provide the merchant weekly sales summary")
@@ -915,97 +746,7 @@ public class InventoryController {
             ));
         }
     }
-    //    @PutMapping("/{id}/sale")
-//    public ResponseEntity<Inventory> recordSale(
-//            @PathVariable Long id,
-//            @RequestParam int quantitySold,
-//            @RequestParam double saleAmount
-//    ) {
-//        Inventory updated = inventoryService.recordSale(id, quantitySold, BigDecimal.valueOf(saleAmount));
-//        return ResponseEntity.ok(updated);
-//    }
-//
-//
-//    @PostMapping("/expense")
-//    @Operation(summary = "Record expense", description = "Record expense incurred by merchant")
-//    public ResponseEntity<Map<String, Object>> recordExpense(@RequestBody Map<String, Object> request) {
-//        try {
-//            // === SAME PATTERN AS /close-day AND OTHERS ===
-//            String userIdStr = (String) request.get("merchantId");  // This is the USER ID from UI
-//            if (userIdStr == null || userIdStr.isBlank()) {
-//                return ResponseEntity.badRequest().body(Map.of(
-//                        "status", "FAILURE",
-//                        "statusCode", 400,
-//                        "message", "merchantId is required"
-//                ));
-//            }
-//
-//            Long userId = Long.parseLong(userIdStr);
-//            Optional<User> userOpt = userRepository.findById(userId);
-//
-//            if (userOpt.isEmpty()) {
-//                return ResponseEntity.badRequest().body(Map.of(
-//                        "status", "FAILURE",
-//                        "statusCode", 400,
-//                        "message", "No user with specified ID exists"
-//                ));
-//            }
-//
-//            String realMerchantId = userOpt.get().getMerchantId();
-//
-//            if (realMerchantId == null || realMerchantId.isBlank()) {
-//                return ResponseEntity.badRequest().body(Map.of(
-//                        "status", "FAILURE",
-//                        "statusCode", 400,
-//                        "message", "This user is not linked to any merchant"
-//                ));
-//            }
-//
-//            // Optional log
-//            System.out.println("EXPENSE - Incoming userId: " + userIdStr +
-//                    " → Resolved to real merchantId: " + realMerchantId);
-//
-//            // Extract amount and note
-//            Object amountObj = request.get("amount");
-//            if (amountObj == null) {
-//                return ResponseEntity.badRequest().body(Map.of(
-//                        "status", "FAILURE",
-//                        "statusCode", 400,
-//                        "message", "amount is required"
-//                ));
-//            }
-//
-//            BigDecimal amount = new BigDecimal(amountObj.toString());
-//
-//            String note = (String) request.get("note");
-//            if (note == null) {
-//                note = "";  // optional note
-//            }
-//
-//            // Record expense using the REAL merchantId
-//            inventoryService.recordExpense(realMerchantId, amount, note);
-//
-//            return ResponseEntity.ok(Map.of(
-//                    "status", "SUCCESS",
-//                    "statusCode", 200,
-//                    "message", "Expense recorded successfully for merchant " + realMerchantId
-//            ));
-//
-//        } catch (NumberFormatException e) {
-//            return ResponseEntity.badRequest().body(Map.of(
-//                    "status", "FAILURE",
-//                    "statusCode", 400,
-//                    "message", "Invalid user ID or amount format"
-//            ));
-//        } catch (Exception e) {
-//            e.printStackTrace();
-//            return ResponseEntity.internalServerError().body(Map.of(
-//                    "status", "ERROR",
-//                    "statusCode", 500,
-//                    "message", "Failed to record expense: " + e.getMessage()
-//            ));
-//        }
-//    }
+
 // Updated /expense endpoint – minimal changes, but narration instead of note for clarity
     @PostMapping("/expense")
     @Operation(summary = "Record expense", description = "Record expense incurred by merchant with narration")
@@ -1343,233 +1084,6 @@ public ResponseEntity<?> getMerchantReport(@PathVariable Long merchantId) {  // 
     }
 
 
-//    @PostMapping("/sale")
-//    @Operation(summary = "Record sale", description = "record sale made to customer")
-//    public ResponseEntity<?> recordSale(@RequestBody SaleRequest request) {
-//        try {
-//
-//
-//            String userIdStr = request.getMerchantId();  // This is the USER ID sent from UI ("15")
-//            if (userIdStr == null || userIdStr.isBlank()) {
-//                return ResponseEntity.badRequest().body(Map.of(
-//                        "status", "FAILURE",
-//                        "message", "merchantId is required"
-//                ));
-//            }
-//
-//            Long userId = Long.parseLong(userIdStr);
-//            Optional<User> userOpt = userRepository.findById(userId);
-//
-//            if (userOpt.isEmpty()) {
-//                return ResponseEntity.badRequest().body(Map.of(
-//                        "status", "FAILURE",
-//                        "message", "No user with specified ID exists"
-//                ));
-//            }
-//
-//            String merchantId = userOpt.get().getMerchantId();
-//
-//            if (merchantId == null || merchantId.isBlank()) {
-//                return ResponseEntity.badRequest().body(Map.of(
-//                        "status", "FAILURE",
-//                        "message", "This user is not linked to any merchant"
-//                ));
-//            }
-//
-//            // Optional: See the correct merchantId in logs
-//            System.out.println("SALE - Incoming userId: " + userIdStr +
-//                    " → Resolved to real merchantId: " + merchantId);
-//
-//            // === FROM HERE ON, EVERYTHING IS YOUR ORIGINAL CODE ===
-//            // But we now use the REAL merchantId instead of request.getMerchantId()
-//            String transactionRef = UUID.randomUUID().toString();
-//            LocalDateTime now = LocalDateTime.now();
-//            LocalDate saleDate = now.toLocalDate();
-//
-//            List<SaleTransaction> saleTransactions = new ArrayList<>();
-//            BigDecimal totalAmount = BigDecimal.ZERO;
-//
-//            // Step 1: Update inventory (your existing working logic)
-//            List<Inventory> updatedInventories = inventoryService.recordMultipleSales(request);
-//
-//            // Step 2: Build sale transactions + calculate total
-//            for (SaleItemRequest itemReq : request.getItems()) {
-//                Inventory inventory = inventoryService.getInventoryItemById(itemReq.getInventoryId());
-//                if (inventory == null) {
-//                    throw new IllegalArgumentException("Item not found with ID: " + itemReq.getInventoryId());
-//                }
-//
-//                BigDecimal unitPrice = inventory.getUnitPrice() != null ? inventory.getUnitPrice() : BigDecimal.ZERO;
-//                BigDecimal lineTotal = unitPrice.multiply(BigDecimal.valueOf(itemReq.getQuantity()));
-//                totalAmount = totalAmount.add(lineTotal);
-//
-//                SaleTransaction transaction = SaleTransaction.builder()
-//                        .merchantId(merchantId)
-//                        .saleDate(saleDate)
-//                        .saleDateTime(now)
-//                        .itemName(inventory.getItemName())
-//                        .itemCode(inventory.getItemCode())
-//                        .quantity(itemReq.getQuantity())
-//                        .unitPrice(unitPrice)
-//                        .totalPrice(lineTotal)
-//                        .customerPhone(request.getCustomerPhone())
-//                        .transactionRef(transactionRef)
-//                        .build();
-//
-//                saleTransactions.add(transaction);
-//            }
-//
-//            // Step 3: Save individual sold items (NEW — this solves your main problem)
-//            saleTransactionRepository.saveAll(saleTransactions);
-//
-//            // Step 4: Update or create DailySalesSummary (we do it manually since no service exists)
-//            DailySalesSummary summary = dailySalesSummaryRepository
-//                    .findByMerchantIdAndRecordDate(merchantId, saleDate)
-//                    .orElse(DailySalesSummary.builder()
-//                            .merchantId(merchantId)
-//                            .recordDate(saleDate)
-//                            .grossSales(BigDecimal.ZERO)
-//                            .deductions(BigDecimal.ZERO)
-//                            .netSales(BigDecimal.ZERO)
-//                            .build());
-//
-//
-//            // Add today's sale to the running total
-//            summary.setGrossSales(summary.getGrossSales().add(totalAmount));
-//            summary.setNetSales(summary.getNetSales().add(totalAmount)); // adjust deductions logic later if needed
-//
-//            dailySalesSummaryRepository.save(summary);
-//
-//            // Step 5: Send payment notification (your original logic, cleaned up)
-//            PaymentNotification paymentNotification = new PaymentNotification();
-//            paymentNotification.setTransactionType("Payment");
-//            paymentNotification.setTransID(transactionRef);
-//            paymentNotification.setTransTime(now.format(DateTimeFormatter.ofPattern("yyyyMMddHHmmss")));
-//            paymentNotification.setTransAmount(totalAmount.setScale(0, RoundingMode.HALF_UP).intValue());
-//            paymentNotification.setPhoneNumber(request.getCustomerPhone());
-//            paymentNotification.setFirstName("Customer");
-//            paymentNotification.setMiddleName("");
-//            paymentNotification.setLastName("Payment");
-//
-//            try {
-//                paymentService.recordPayment(paymentNotification);
-//            } catch (Exception e) {
-//                // Log but don't fail the sale
-//                System.err.println("Payment notification failed: " + e.getMessage());
-//            }
-//
-//            // Success response
-//            return ResponseEntity.ok(Map.of(
-//                    "status", "SUCCESS",
-//                    "message", "Sale recorded successfully",
-//                    "transactionRef", transactionRef,
-//                    "totalAmount", totalAmount,
-//                    "itemsSold", saleTransactions.size(),
-//                    "data", updatedInventories
-//            ));
-//
-//        } catch (IllegalArgumentException e) {
-//            return ResponseEntity.badRequest().body(Map.of(
-//                    "status", "FAILURE",
-//                    "message", e.getMessage()
-//            ));
-//        } catch (Exception e) {
-//            {
-//                e.printStackTrace();
-//                return ResponseEntity.internalServerError().body(Map.of(
-//                        "status", "ERROR",
-//                        "message", "Failed to record sale",
-//                        "error", e.getMessage()
-//                ));
-//            }
-//        }
-//    }
-
-//    @GetMapping("/sales/daily-items")
-//    @Operation(summary = "Get all sold items for a specific day - simplified view")
-//    public ResponseEntity<?> getDailySoldItems(
-//            @RequestParam String merchantId,   // ← This is actually the USER ID from UI/JWT
-//            @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate date) {
-//
-//        try {
-//            // === SAME PATTERN AS EVERY OTHER ENDPOINT ===
-//            Long userId = Long.parseLong(merchantId);
-//
-//            Optional<User> userOpt = userRepository.findById(userId);
-//
-//            if (userOpt.isEmpty()) {
-//                return ResponseEntity.badRequest().body(Map.of(
-//                        "status", "FAILURE",
-//                        "statusCode", 400,
-//                        "message", "No user with specified ID exists"
-//                ));
-//            }
-//
-//            String realMerchantId = userOpt.get().getMerchantId();
-//
-//            if (realMerchantId == null || realMerchantId.isBlank()) {
-//                return ResponseEntity.badRequest().body(Map.of(
-//                        "status", "FAILURE",
-//                        "statusCode", 400,
-//                        "message", "This user is not linked to any merchant"
-//                ));
-//            }
-//
-//            // Optional log
-//            System.out.println("DAILY-ITEMS - Incoming userId: " + merchantId +
-//                    " → Resolved to real merchantId: " + realMerchantId);
-//
-//            // Fetch transactions using the REAL merchantId
-//            List<SaleTransaction> transactions = saleTransactionRepository
-//                    .findByMerchantIdAndSaleDateOrderBySaleDateTimeDesc(realMerchantId, date);
-//
-//            // Clean, simple items
-//            List<Map<String, Object>> simplifiedItems = transactions.stream()
-//                    .map(t -> {
-//                        Map<String, Object> item = new HashMap<>();
-//                        item.put("itemName", t.getItemName());
-//                        item.put("itemCode", t.getItemCode());
-//                        item.put("quantity", t.getQuantity());
-//                        item.put("customerPhone", t.getCustomerPhone() != null ? t.getCustomerPhone() : "");
-//                        item.put("transactionRef", t.getTransactionRef());
-//                        item.put("totalPrice", t.getTotalPrice());  // nice to have per line
-//                        return item;
-//                    })
-//                    .toList();
-//
-//            BigDecimal dailyTotal = transactions.stream()
-//                    .map(SaleTransaction::getTotalPrice)
-//                    .reduce(BigDecimal.ZERO, BigDecimal::add);
-//
-//            int totalQuantitySold = transactions.stream()
-//                    .mapToInt(SaleTransaction::getQuantity)
-//                    .sum();
-//
-//            return ResponseEntity.ok(Map.of(
-//                    "status", "SUCCESS",
-//                    "date", date.toString(),
-//                    "merchantId", realMerchantId,           // return the real one (optional)
-//                    "totalSalesAmount", dailyTotal,
-//                    "totalItemsSold", totalQuantitySold,
-//                    "numberOfTransactions", transactions.size(),
-//                    "items", simplifiedItems
-//            ));
-//
-//        } catch (NumberFormatException e) {
-//            return ResponseEntity.badRequest().body(Map.of(
-//                    "status", "FAILURE",
-//                    "statusCode", 400,
-//                    "message", "Invalid user ID format"
-//            ));
-//        } catch (Exception e) {
-//            e.printStackTrace();
-//            return ResponseEntity.internalServerError().body(Map.of(
-//                    "status", "ERROR",
-//                    "statusCode", 500,
-//                    "message", "Failed to retrieve daily sold items: " + e.getMessage()
-//            ));
-//        }
-//    }
 
     @GetMapping("/sales/daily-items")
     @Operation(summary = "Get all sold items for a specific day - simplified view")

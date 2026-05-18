@@ -5,6 +5,7 @@ import com.dayworks_ltd.loyalty_engine.auth.enums.Status;
 import com.dayworks_ltd.loyalty_engine.auth.enums.UserRole;
 import com.dayworks_ltd.loyalty_engine.auth.services.UserService;
 import com.dayworks_ltd.loyalty_engine.common.ApiResponseBody;
+import com.dayworks_ltd.loyalty_engine.dto.CreateMerchantRequest;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -28,46 +29,73 @@ public class MerchantController {
         this.merchantService = merchantService;
         this.userService = userService;
     }
+//
+//    @PostMapping("/createMerchant")
+//    public ResponseEntity<ApiResponseBody> createMerchant(@Valid @RequestBody Merchant merchant) {
+//        log.info("Received request to create merchant: {}", merchant.getBusinessName());
+//        System.out.println("Received request to create merchant: " + merchant.getBusinessName());
+//        try {
+//            Merchant created = merchantService.createMerchant(merchant);
+//            userService.addUser(new UserDto(merchant.getBusinessName(),
+//                    merchant.getBusinessName() + "123",
+//                    UserRole.MERCHANT.name(),
+//                    Status.ACTIVE.name(), created.getId().toString()));
+//            log.info("Merchant created successfully with ID: {}", created.getId());
+//            System.out.println("Merchant created successfully with ID: " + created.getId());
+//
+//            ApiResponseBody response = ApiResponseBody.builder()
+//                    .status("200")
+//                    .message("success")
+//                    .respObject(created)
+//                    .build();
+//            return new ResponseEntity<>(response, HttpStatus.CREATED);
+//        } catch (IllegalArgumentException e) {
+//            log.error("Failed to create merchant: {}", e.getMessage());
+//            System.out.println("Failed to create merchant: " + e.getMessage());
+//
+//            ApiResponseBody response = ApiResponseBody.builder()
+//                    .status("400")
+//                    .message(e.getMessage()) // Use specific error message
+//                    .respObject(null)
+//                    .build();
+//            return new ResponseEntity<>(response, HttpStatus.BAD_REQUEST);
+//        } catch (Exception e) {
+//            log.error("Failed to create merchant: {}", e.getMessage());
+//            System.out.println("Failed to create merchant: " + e.getMessage());
+//
+//            ApiResponseBody response = ApiResponseBody.builder()
+//                    .status("500")
+//                    .message(e.getMessage()) // Use specific error message
+//                    .respObject(null)
+//                    .build();
+//            return new ResponseEntity<>(response, HttpStatus.INTERNAL_SERVER_ERROR);
+//        }
+//    }
 
     @PostMapping("/createMerchant")
-    public ResponseEntity<ApiResponseBody> createMerchant(@Valid @RequestBody Merchant merchant) {
-        log.info("Received request to create merchant: {}", merchant.getBusinessName());
-        System.out.println("Received request to create merchant: " + merchant.getBusinessName());
+    public ResponseEntity<ApiResponseBody> createMerchant(@Valid @RequestBody CreateMerchantRequest request) {
         try {
-            Merchant created = merchantService.createMerchant(merchant);
-            userService.addUser(new UserDto(merchant.getBusinessName(),
-                    merchant.getBusinessName() + "123",
-                    UserRole.MERCHANT.name(),
-                    Status.ACTIVE.name(), created.getId().toString()));
-            log.info("Merchant created successfully with ID: {}", created.getId());
-            System.out.println("Merchant created successfully with ID: " + created.getId());
+            Merchant created = merchantService.createMerchant(request);
 
-            ApiResponseBody response = ApiResponseBody.builder()
-                    .status("200")
-                    .message("success")
-                    .respObject(created)
-                    .build();
-            return new ResponseEntity<>(response, HttpStatus.CREATED);
+            return ResponseEntity.status(HttpStatus.CREATED)
+                    .body(ApiResponseBody.builder()
+                            .status("201")
+                            .message("success")
+                            .respObject(created)
+                            .build());
         } catch (IllegalArgumentException e) {
-            log.error("Failed to create merchant: {}", e.getMessage());
-            System.out.println("Failed to create merchant: " + e.getMessage());
-
-            ApiResponseBody response = ApiResponseBody.builder()
-                    .status("400")
-                    .message(e.getMessage()) // Use specific error message
-                    .respObject(null)
-                    .build();
-            return new ResponseEntity<>(response, HttpStatus.BAD_REQUEST);
+            return ResponseEntity.badRequest()
+                    .body(ApiResponseBody.builder()
+                            .status("400")
+                            .message("Invalid request")  // don't expose e.getMessage()
+                            .build());
         } catch (Exception e) {
             log.error("Failed to create merchant: {}", e.getMessage());
-            System.out.println("Failed to create merchant: " + e.getMessage());
-
-            ApiResponseBody response = ApiResponseBody.builder()
-                    .status("500")
-                    .message(e.getMessage()) // Use specific error message
-                    .respObject(null)
-                    .build();
-            return new ResponseEntity<>(response, HttpStatus.INTERNAL_SERVER_ERROR);
+            return ResponseEntity.internalServerError()
+                    .body(ApiResponseBody.builder()
+                            .status("500")
+                            .message("An unexpected error occurred") // don't expose e.getMessage()
+                            .build());
         }
     }
 

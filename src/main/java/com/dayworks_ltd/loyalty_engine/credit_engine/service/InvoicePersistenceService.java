@@ -89,13 +89,7 @@ public class InvoicePersistenceService {
         return saved;
     }
 
-    /**
-     * Find existing supplier by PIN (preferred) or normalized name (fallback).
-     * If neither matches, create a new supplier record.
-     *
-     * This is an upsert — NOT a blind insert. Calling this twice with the
-     * same supplier will always return the same DB row.
-     */
+
     private Supplier resolveSupplier(SupplierDTO supplierData) {
 
         String pin = supplierData.getPin();

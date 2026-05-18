@@ -1,5 +1,6 @@
 package com.dayworks_ltd.loyalty_engine.inventory.services;
 
+import com.dayworks_ltd.loyalty_engine.auth.model.User;
 import com.dayworks_ltd.loyalty_engine.inventory.DTO.*;
 import com.dayworks_ltd.loyalty_engine.inventory.models.DailySalesSummary;
 import com.dayworks_ltd.loyalty_engine.inventory.models.Expense;
@@ -21,7 +22,6 @@ import java.io.InputStream;
 
 import java.io.InputStreamReader;
 import java.math.BigDecimal;
-import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.*;
@@ -451,23 +451,6 @@ public Map<String, Object> closeDay(String merchantId) {
         logger.info("item code: {}  Item name: {}", item.getItemCode(), item.getItemName());
 
 
-//        int finalClosing = item.getStartingStock() + item.getAddedStock() - item.getSoldStock();
-//
-//        // Detect negative stock
-//        if (finalClosing < 0) {
-//            String warning = String.format(
-//                    "Item %s has NEGATIVE closing stock: %d (start=%d, added=%d, sold=%d)",
-//                    item.getItemCode(), finalClosing, item.getStartingStock(),
-//                    item.getAddedStock(), item.getSoldStock()
-//            );
-//            logger.error(warning);
-//            warnings.add(warning);
-//        }
-//
-//        // Explicitly set closing_stock = calculated value
-//        item.setClosingStock(finalClosing);
-//        item.setAvailableStock(finalClosing);
-//        item.setLastUpdated(LocalDateTime.now());
 
         // Accumulate totals
         grossSales = grossSales.add(item.getTotalSales() != null ? item.getTotalSales() : BigDecimal.ZERO);
@@ -499,56 +482,6 @@ public Map<String, Object> closeDay(String merchantId) {
 
     dailySalesSummaryRepository.save(summary);
 
-//    // CREATE NEW RECORDS for tomorrow (don't mutate today's)
-//    LocalDate tomorrow = today.plusDays(1);
-//    List<Inventory> tomorrowItems = new ArrayList<>();
-//
-//    for (Inventory todayItem : todayItems) {
-//        Inventory tomorrowItem = new Inventory();  // NEW OBJECT - this is the fix
-//
-//        // Copy static fields
-//        tomorrowItem.setMerchantId(todayItem.getMerchantId());
-//        tomorrowItem.setItemName(todayItem.getItemName());
-//        tomorrowItem.setItemCode(todayItem.getItemCode());
-//        tomorrowItem.setUnitPrice(todayItem.getUnitPrice());
-//        tomorrowItem.setUnitCost(todayItem.getUnitCost());
-//        tomorrowItem.setProductCategory(todayItem.getProductCategory());
-//        tomorrowItem.setProductBrand(todayItem.getProductBrand());
-//        tomorrowItem.setProductDescription(todayItem.getProductDescription());
-//        tomorrowItem.setProductImageUrl(todayItem.getProductImageUrl());
-//        tomorrowItem.setReorderLevel(todayItem.getReorderLevel());
-//        tomorrowItem.setSupplierName(todayItem.getSupplierName());
-//        tomorrowItem.setBatchNumber(todayItem.getBatchNumber());
-//        tomorrowItem.setExpiryDate(todayItem.getExpiryDate());
-//
-//        // Carry forward stock (with safety check)
-//        int carryForward = todayItem.getClosingStock();
-//        if (carryForward < 0) {
-//            logger.error("Item {} has negative closing {}. Setting tomorrow's start to 0.",
-//                    todayItem.getItemCode(), carryForward);
-//            carryForward = 0;
-//        }
-//
-//        tomorrowItem.setStartingStock(carryForward);
-//        tomorrowItem.setAddedStock(0);
-//        tomorrowItem.setSoldStock(0);
-//        tomorrowItem.setAvailableStock(carryForward);
-//        tomorrowItem.setClosingStock(carryForward);
-//        tomorrowItem.setTotalSales(BigDecimal.ZERO);
-//        tomorrowItem.setGrossSales(BigDecimal.ZERO);
-//        tomorrowItem.setNetlSales(BigDecimal.ZERO);
-//        tomorrowItem.setDeductions(BigDecimal.ZERO);
-//        tomorrowItem.setExpenseNote("");
-//        tomorrowItem.setRecordDate(tomorrow);
-//        tomorrowItem.setIsActive(true);
-//        tomorrowItem.setLastUpdated(LocalDateTime.now());
-//
-//        tomorrowItems.add(tomorrowItem);
-//    }
-//
-//    inventoryRepository.saveAll(tomorrowItems);
-
-    // Return success
     Map<String, Object> report = new HashMap<>();
     report.put("date", today);
     report.put("grossSales", grossSales);
@@ -623,26 +556,6 @@ public Map<String, Object> closeDay(String merchantId) {
 
 
 
-//    public Inventory recordSale(Long id, int quantitySold, BigDecimal saleAmount) {
-//        Optional<Inventory> existing = inventoryRepository.findById(id);
-//        if (existing.isPresent()) {
-//            Inventory item = existing.get();
-//
-//            // Update stock counts
-//            item.setSoldStock(item.getSoldStock() + quantitySold);
-//            item.setAvailableStock(item.getAvailableStock() - quantitySold);
-//
-//            // Safely handle nulls
-//            if (item.getTotalSales() == null) item.setTotalSales(BigDecimal.ZERO);
-//
-//            // Use BigDecimal math
-//            item.setTotalSales(item.getTotalSales().add(saleAmount));
-//
-//            return inventoryRepository.save(item);
-//        }
-//        throw new RuntimeException("Item not found");
-//    }
-// Updated InventoryService.recordExpense (in your service class)
 @Transactional
 public void recordExpense(String merchantId, BigDecimal amount, String narration) {
     LocalDate today = LocalDate.now();
@@ -694,49 +607,6 @@ public void recordExpense(String merchantId, BigDecimal amount, String narration
     }
 }
 
-//    @Transactional
-//    public void recordExpense(String merchantId, BigDecimal amount, String note) {
-//        LocalDate today = LocalDate.now();
-//
-//        // Get or create the daily summary (source of truth)
-//        DailySalesSummary summary = dailySalesSummaryRepository
-//                .findByMerchantIdAndRecordDate(merchantId, today)
-//                .orElse(DailySalesSummary.builder()
-//                        .merchantId(merchantId)
-//                        .recordDate(today)
-//                        .grossSales(BigDecimal.ZERO)
-//                        .deductions(BigDecimal.ZERO)
-//                        .netSales(BigDecimal.ZERO)
-//                        .createdAt(LocalDateTime.now())
-//                        .build());
-//
-//        // Add the expense to deductions
-//        BigDecimal currentDeductions = summary.getDeductions() != null ? summary.getDeductions() : BigDecimal.ZERO;
-//        summary.setDeductions(currentDeductions.add(amount));
-//
-//        // Recalculate net sales (gross - deductions)
-//        BigDecimal gross = summary.getGrossSales() != null ? summary.getGrossSales() : BigDecimal.ZERO;
-//        summary.setNetSales(gross.subtract(summary.getDeductions()));
-//
-//        // Optional: store note (you can add a deductionsNote field later if needed)
-//        // For now, you could log it or ignore
-//
-//        summary.setUpdatedAt(LocalDateTime.now());
-//        dailySalesSummaryRepository.save(summary);
-//
-//        // Optional: if you still want to try updating inventory row
-//        Optional<Inventory> inventoryOpt = inventoryRepository
-//                .findFirstByMerchantIdAndRecordDate(merchantId, today);
-//
-//        if (inventoryOpt.isPresent()) {
-//            Inventory item = inventoryOpt.get();
-//            BigDecimal currentExpense = item.getDeductions() != null ? item.getDeductions() : BigDecimal.ZERO;
-//            item.setDeductions(currentExpense.add(amount));
-//            item.setExpenseNote(note);  // overwrites previous note
-//            inventoryRepository.save(item);
-//        }
-//        // If no inventory row → that's fine, we still recorded the deduction
-//    }
 
 
     public List<Inventory> getAllItems() {
@@ -747,6 +617,69 @@ public void recordExpense(String merchantId, BigDecimal amount, String narration
         return inventoryRepository.findByMerchantId(merchantId);
     }
 
+
+    public List<InventoryResponseDto> getAllItemsForMerchantWithPricing(String merchantId, User user) {
+
+        List<Inventory> items = inventoryRepository.findByMerchantId(merchantId);
+
+        return items.stream()
+                .map(item -> convertToResponseDto(item, user))
+                .toList();
+    }
+
+    private InventoryResponseDto convertToResponseDto(Inventory item, User user) {
+        BigDecimal displayPrice = item.getUnitPrice();   // default = retail price
+        String priceType = "RETAIL";
+
+        // Check if merchant has Wholesale subscription
+        if (isWholesaleSubscriber(user)) {
+            displayPrice = calculateWholesalePrice(item);
+            priceType = "WHOLESALE";
+        }
+
+        InventoryResponseDto dto = new InventoryResponseDto();
+
+        dto.setId(item.getId());
+        dto.setMerchantId(item.getMerchantId());
+        dto.setItemName(item.getItemName());
+        dto.setItemCode(item.getItemCode());
+
+        dto.setStartingStock(item.getStartingStock());
+        dto.setAddedStock(item.getAddedStock());
+        dto.setSoldStock(item.getSoldStock());
+        dto.setAvailableStock(item.getAvailableStock());
+        dto.setClosingStock(item.getClosingStock());
+
+        dto.setTotalSales(item.getTotalSales());
+        dto.setGrossSales(item.getGrossSales());
+        dto.setNetlSales(item.getNetlSales());
+        dto.setDeductions(item.getDeductions());
+
+        dto.setUnitCost(item.getUnitCost());
+        dto.setUnitPrice(displayPrice);           // ← Dynamic price applied here
+
+        dto.setExpenseNote(item.getExpenseNote());
+        dto.setIsActive(item.getIsActive());
+
+        dto.setProductImageUrl(item.getProductImageUrl());
+        dto.setProductDescription(item.getProductDescription());
+        dto.setProductCategory(item.getProductCategory());
+        dto.setBatchNumber(item.getBatchNumber());
+        dto.setSupplierName(item.getSupplierName());
+        dto.setDatePurchased(item.getDatePurchased());
+        dto.setExpiryDate(item.getExpiryDate());
+        dto.setReorderLevel(item.getReorderLevel());
+        dto.setLastUpdated(item.getLastUpdated());
+        dto.setProductBrand(item.getProductBrand());
+        dto.setRecordDate(item.getRecordDate());
+
+        dto.setWholesalePrice(calculateWholesalePrice(item));  // always return for reference
+        dto.setPriceType(priceType);
+
+        return dto;
+    }
+
+
     public BigDecimal calculateNetSales(String merchantId) {
         List<Inventory> items = inventoryRepository.findByMerchantId(merchantId);
 
@@ -754,6 +687,41 @@ public void recordExpense(String merchantId, BigDecimal amount, String narration
                 .map(i -> (i.getTotalSales() == null ? BigDecimal.ZERO : i.getTotalSales())
                         .subtract(i.getDeductions() == null ? BigDecimal.ZERO : i.getDeductions()))
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
+    }
+
+    private boolean isWholesaleSubscriber(User user) {
+        if (user == null || user.getSubscriptionPlan() == null) {
+            return false;
+        }
+
+        String plan = user.getSubscriptionPlan().toLowerCase().trim();
+        return plan.contains("wholesale") ||
+                plan.contains("business") ||
+                plan.contains("premium") ||
+                plan.contains("enterprise");
+    }
+
+    /**
+     * Calculate Wholesale Price Logic - Customize this as needed
+     */
+    private BigDecimal calculateWholesalePrice(Inventory item) {
+        BigDecimal cost = item.getUnitCost();
+        BigDecimal unitPrice = item.getUnitPrice();
+
+        boolean hasCost = cost != null && cost.compareTo(BigDecimal.ZERO) > 0;
+        boolean hasUnitPrice = unitPrice != null && unitPrice.compareTo(BigDecimal.ZERO) > 0;
+
+        if (hasCost) {
+            // Cost-based: Cost + 20% margin
+            return cost.multiply(BigDecimal.valueOf(1.20));
+        }
+
+        if (hasUnitPrice) {
+            // Fallback: 85% of retail price
+            return unitPrice.multiply(BigDecimal.valueOf(0.85));
+        }
+
+        return BigDecimal.ZERO; // no basis for calculation
     }
 
     @Transactional

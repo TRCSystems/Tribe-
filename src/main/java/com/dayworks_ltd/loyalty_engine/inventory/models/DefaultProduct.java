@@ -1,5 +1,6 @@
 package com.dayworks_ltd.loyalty_engine.inventory.models;
 
+import com.dayworks_ltd.loyalty_engine.auth.enums.BusinessType;
 import jakarta.persistence.*;
 import lombok.*;
 
@@ -29,6 +30,10 @@ public class DefaultProduct {
 
     @Column(name = "created_at", nullable = false)
     private LocalDateTime createdAt;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "business_type", nullable = false)
+    private BusinessType businessType;
 
     @Column(name = "updated_at", nullable = false)
     private LocalDateTime updatedAt;

@@ -109,8 +109,11 @@ public class SupplierInvoice {
     @Column(precision = 12, scale = 2)
     private BigDecimal kraTotalAmount;
 
+    @Column(length = 255)
+    private String kraSupplierName;
+
     @Column
-    private LocalDateTime kraInvoiceDate;
+    private LocalDate kraInvoiceDate;
 
     @Column(length = 100)
     private String kraDeviceSerial;
@@ -123,6 +126,8 @@ public class SupplierInvoice {
     // ==============================
     // VALIDATION FLAGS (BEHAVIOR SIGNALS)
     // ==============================
+
+
     @Column
     private boolean duplicateSuspected;
     @Column
@@ -131,6 +136,8 @@ public class SupplierInvoice {
     private boolean amountMismatch;
     @Column
     private boolean dateMismatch;
+    @Column
+    private LocalDateTime kraCheckedAt;
 
     @PrePersist
     protected void onCreate() {

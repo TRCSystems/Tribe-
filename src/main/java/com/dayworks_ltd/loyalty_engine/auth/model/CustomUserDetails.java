@@ -1,5 +1,6 @@
 package com.dayworks_ltd.loyalty_engine.auth.model;
 
+import com.dayworks_ltd.loyalty_engine.auth.enums.Status;
 import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.security.core.GrantedAuthority;
 
@@ -35,5 +36,18 @@ public class CustomUserDetails implements UserDetails {
     public boolean isCredentialsNonExpired(){return true;}
 
     @Override
-    public boolean isEnabled(){return true;}
+    public boolean isEnabled(){
+
+        return user.getStatus() == Status.ACTIVE; }
+
+    public String getBusinessType() {
+        if (user.getMerchant() == null) {
+            return null;
+        }
+        return user.getMerchant().getBusinessType();
+    }
+
+    public Boolean getIsWholesaler() {
+        return user.getIsWholesaler();
+    }
 }

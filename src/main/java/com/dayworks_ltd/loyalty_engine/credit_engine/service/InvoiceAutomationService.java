@@ -23,10 +23,7 @@ public class InvoiceAutomationService {
     @Value("${automation.url}")
     private String automationUrl;
 
-    /**
-     * Step 1: Submit the invoice PDF to the external API
-     * Returns immediately with "pending" status and submission ID
-     */
+
     public InvoiceExtractionResponse submitInvoiceForProcessing(MultipartFile invoiceFile) {
         try {
             log.info("Submitting invoice for processing: {}", invoiceFile.getOriginalFilename());

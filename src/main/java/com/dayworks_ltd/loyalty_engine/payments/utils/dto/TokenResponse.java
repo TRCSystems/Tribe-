@@ -1,13 +1,14 @@
 package com.dayworks_ltd.loyalty_engine.payments.utils.dto;
 
-import com.google.gson.annotations.SerializedName;
+import com.fasterxml.jackson.annotation.JsonProperty;
 import lombok.Data;
 
 @Data
 public class TokenResponse {
-    @SerializedName("access_token")
+
+    @JsonProperty("access_token")
     private String accessToken;
 
-    @SerializedName("expires_in")
+    @JsonProperty("expires_in")
     private String expiresIn;
 }

@@ -14,4 +14,5 @@ public class UserDto {
     private String role;
     private String status;
     private String merchantId=null;
+    private Boolean isWholesaler = false;
 }

@@ -84,6 +84,9 @@ public class Merchant {
     @Column(name = "meta_sync_error", columnDefinition = "TEXT")
     private String metaSyncError;
 
+
+
+
     @PrePersist
     protected void onCreate() {
         this.createdAt = LocalDateTime.now();
