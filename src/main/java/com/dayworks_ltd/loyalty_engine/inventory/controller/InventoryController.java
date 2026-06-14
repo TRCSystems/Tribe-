@@ -71,6 +71,7 @@ public class InventoryController {
     private final DefaultProductRepository defaultProductRepository;
     private final ProductPerformanceService productPerformanceService;
     private final RecurringExpenseRepository recurringExpenseRepository;
+    private final WholesalePriceConfigRepository wholesalePriceConfigRepository;
 
 
 
@@ -97,11 +98,12 @@ public class InventoryController {
     @Autowired
     private MerchantService merchantService;
 
-    public InventoryController(ExpenseRepository expenseRepository, DefaultProductRepository defaultProductRepository, ProductPerformanceService productPerformanceService, RecurringExpenseRepository recurringExpenseRepository) {
+    public InventoryController(ExpenseRepository expenseRepository, DefaultProductRepository defaultProductRepository, ProductPerformanceService productPerformanceService, RecurringExpenseRepository recurringExpenseRepository, WholesalePriceConfigRepository wholesalePriceConfigRepository) {
         this.expenseRepository = expenseRepository;
         this.defaultProductRepository = defaultProductRepository;
         this.productPerformanceService = productPerformanceService;
         this.recurringExpenseRepository = recurringExpenseRepository;
+        this.wholesalePriceConfigRepository = wholesalePriceConfigRepository;
     }
 
     @GetMapping("/product-defaults")
@@ -1032,7 +1034,7 @@ public ResponseEntity<?> getMerchantReport(@PathVariable Long merchantId) {  // 
                 ));
             }
 
-            log.info("SALE - Incoming userId: {} → Resolved to real merchantId: {}", userIdStr, merchantId);
+            log.info("SALE - Incoming userId: {} → Resolved to real merchantId: {}", userIdStr, merchantId,request);
 
             // ── Core sale logic ─────────────────────────────────────────────────
             String transactionRef = UUID.randomUUID().toString();
@@ -1052,12 +1054,24 @@ public ResponseEntity<?> getMerchantReport(@PathVariable Long merchantId) {  // 
                     throw new IllegalArgumentException("Item not found with ID: " + itemReq.getInventoryId());
                 }
 
-                BigDecimal unitPrice = inventory.getUnitPrice() != null ? inventory.getUnitPrice() : BigDecimal.ZERO;
-                BigDecimal discount = itemReq.getDiscount() != null ? itemReq.getDiscount() : BigDecimal.ZERO;
+                // ── Resolve price based on orderType ──────────────────────────────
+                BigDecimal unitPrice;
+                if ("WHOLESALE".equalsIgnoreCase(itemReq.getOrderType())) {
+                    unitPrice = wholesalePriceConfigRepository
+                            .findActivePrice(inventory.getItemCode(), inventory.getMerchantId(), LocalDate.now())
+                            .map(WholesalePriceConfig::getWholesalePrice)
+                            .orElseThrow(() -> new IllegalArgumentException(
+                                    "No wholesale price configured for item: " + inventory.getItemName() +
+                                            " [" + inventory.getItemCode() + "]. Contact admin to set wholesale pricing."
+                            ));
+                } else {
+                    unitPrice = inventory.getUnitPrice() != null ? inventory.getUnitPrice() : BigDecimal.ZERO;
+                }
+                // ──────────────────────────────────────────────────────────────────
 
-                // Calculate line total with discount/extra
+                BigDecimal discount = itemReq.getDiscount() != null ? itemReq.getDiscount() : BigDecimal.ZERO;
                 BigDecimal baseAmount = unitPrice.multiply(BigDecimal.valueOf(itemReq.getQuantity()));
-                BigDecimal lineTotal = baseAmount.add(discount);  // discount positive → subtracts, negative → adds
+                BigDecimal lineTotal = baseAmount.add(discount);
 
                 totalAmount = totalAmount.add(lineTotal);
 
@@ -1068,9 +1082,9 @@ public ResponseEntity<?> getMerchantReport(@PathVariable Long merchantId) {  // 
                         .itemName(inventory.getItemName())
                         .itemCode(inventory.getItemCode())
                         .quantity(itemReq.getQuantity())
-                        .unitPrice(unitPrice)
-                        .discount(discount)           // ← NEW: store per-line discount
-                        .totalPrice(lineTotal)        // ← final amount after discount
+                        .unitPrice(unitPrice)        // ← now correct price
+                        .discount(discount)
+                        .totalPrice(lineTotal)
                         .customerPhone(request.getCustomerPhone())
                         .transactionRef(transactionRef)
                         .build();

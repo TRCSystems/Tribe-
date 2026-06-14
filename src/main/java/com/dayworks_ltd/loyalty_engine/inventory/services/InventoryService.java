@@ -2,14 +2,8 @@ package com.dayworks_ltd.loyalty_engine.inventory.services;
 
 import com.dayworks_ltd.loyalty_engine.auth.model.User;
 import com.dayworks_ltd.loyalty_engine.inventory.DTO.*;
-import com.dayworks_ltd.loyalty_engine.inventory.models.DailySalesSummary;
-import com.dayworks_ltd.loyalty_engine.inventory.models.Expense;
-import com.dayworks_ltd.loyalty_engine.inventory.models.Inventory;
-import com.dayworks_ltd.loyalty_engine.inventory.models.RecurringExpense;
-import com.dayworks_ltd.loyalty_engine.inventory.repositories.DailySalesSummaryRepository;
-import com.dayworks_ltd.loyalty_engine.inventory.repositories.ExpenseRepository;
-import com.dayworks_ltd.loyalty_engine.inventory.repositories.InventoryRepository;
-import com.dayworks_ltd.loyalty_engine.inventory.repositories.RecurringExpenseRepository;
+import com.dayworks_ltd.loyalty_engine.inventory.models.*;
+import com.dayworks_ltd.loyalty_engine.inventory.repositories.*;
 import jakarta.transaction.Transactional;
 import lombok.extern.slf4j.Slf4j;
 import org.slf4j.Logger;
@@ -35,6 +29,9 @@ public class InventoryService {
 
     @Autowired
     private InventoryRepository inventoryRepository;
+
+    @Autowired
+    private WholesalePriceConfigRepository wholesalePriceConfigRepository;
     @Autowired
     private DailySalesSummaryRepository dailySalesSummaryRepository;
 
@@ -766,25 +763,54 @@ public void recordExpense(String merchantId, BigDecimal amount, String narration
     /**
      * Calculate Wholesale Price Logic - Customize this as needed
      */
+
+
     private BigDecimal calculateWholesalePrice(Inventory item) {
+        // 1. Try merchant-specific price
+        Optional<WholesalePriceConfig> config = wholesalePriceConfigRepository
+                .findActivePrice(item.getItemCode(), item.getMerchantId(), LocalDate.now());
+
+        if (config.isPresent()) {
+            return config.get().getWholesalePrice();
+        }
+
+        // 2. Try global fallback price (merchantId = "GLOBAL")
+        Optional<WholesalePriceConfig> globalConfig = wholesalePriceConfigRepository
+                .findActivePrice(item.getItemCode(), "GLOBAL", LocalDate.now());
+
+        if (globalConfig.isPresent()) {
+            return globalConfig.get().getWholesalePrice();
+        }
+
+        // 3. Last resort: fall back to computed price if no config exists yet
         BigDecimal cost = item.getUnitCost();
-        BigDecimal unitPrice = item.getUnitPrice();
-
-        boolean hasCost = cost != null && cost.compareTo(BigDecimal.ZERO) > 0;
-        boolean hasUnitPrice = unitPrice != null && unitPrice.compareTo(BigDecimal.ZERO) > 0;
-
-        if (hasCost) {
-            // Cost-based: Cost + 20% margin
+        if (cost != null && cost.compareTo(BigDecimal.ZERO) > 0) {
             return cost.multiply(BigDecimal.valueOf(1.20));
         }
 
-        if (hasUnitPrice) {
-            // Fallback: 85% of retail price
-            return unitPrice.multiply(BigDecimal.valueOf(0.85));
-        }
-
-        return BigDecimal.ZERO; // no basis for calculation
+        return item.getUnitPrice() != null
+                ? item.getUnitPrice().multiply(BigDecimal.valueOf(0.85))
+                : BigDecimal.ZERO;
     }
+//    private BigDecimal calculateWholesalePrice(Inventory item) {
+//        BigDecimal cost = item.getUnitCost();
+//        BigDecimal unitPrice = item.getUnitPrice();
+//
+//        boolean hasCost = cost != null && cost.compareTo(BigDecimal.ZERO) > 0;
+//        boolean hasUnitPrice = unitPrice != null && unitPrice.compareTo(BigDecimal.ZERO) > 0;
+//
+//        if (hasCost) {
+//            // Cost-based: Cost + 20% margin
+//            return cost.multiply(BigDecimal.valueOf(1.20));
+//        }
+//
+//        if (hasUnitPrice) {
+//            // Fallback: 85% of retail price
+//            return unitPrice.multiply(BigDecimal.valueOf(0.85));
+//        }
+//
+//        return BigDecimal.ZERO; // no basis for calculation
+//    }
 
     @Transactional
     public Inventory updateInventoryItem(Long id, String merchantId, String itemName, Integer quantity, BigDecimal unitPrice) {
