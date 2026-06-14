@@ -1034,8 +1034,8 @@ public ResponseEntity<?> getMerchantReport(@PathVariable Long merchantId) {  // 
                 ));
             }
 
-            log.info("SALE - Incoming userId: {} → Resolved to real merchantId: {}", userIdStr, merchantId,request);
-
+            log.info("SALE - Incoming userId: {} → Resolved to real merchantId: {} | Request: {}",
+                    userIdStr, merchantId, request);
             // ── Core sale logic ─────────────────────────────────────────────────
             String transactionRef = UUID.randomUUID().toString();
             LocalDateTime now = LocalDateTime.now();
@@ -1056,7 +1056,7 @@ public ResponseEntity<?> getMerchantReport(@PathVariable Long merchantId) {  // 
 
                 // ── Resolve price based on orderType ──────────────────────────────
                 BigDecimal unitPrice;
-                if ("WHOLESALE".equalsIgnoreCase(itemReq.getOrderType())) {
+                if ("WHOLESALE".equalsIgnoreCase(request.getOrderType())) {
                     unitPrice = wholesalePriceConfigRepository
                             .findActivePrice(inventory.getItemCode(), inventory.getMerchantId(), LocalDate.now())
                             .map(WholesalePriceConfig::getWholesalePrice)

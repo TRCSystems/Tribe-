@@ -9,4 +9,5 @@ public class SaleRequest {
     private String merchantId;
     private String customerPhone;
     private List<SaleItemRequest> items;
+    private String orderType; // "RETAIL" or "WHOLESALE" — applies to entire order
 }
