@@ -29,12 +29,17 @@ public class SaleTransaction {
 
     @Column(name = "item_name", nullable = false)
     private String itemName;
+    @Column(name = "order_type", nullable = false)
+    private String orderType;
 
     @Column(name = "item_code", nullable = false)
     private String itemCode;
 
     @Column(nullable = false)
     private Integer quantity;
+
+    @Column(name = "unit_cost", precision = 12, scale = 2, nullable = false)
+    private BigDecimal unitCost;
 
     @Column(name = "unit_price", precision = 12, scale = 2, nullable = false)
     private BigDecimal unitPrice;

@@ -1,6 +1,7 @@
 package com.dayworks_ltd.loyalty_engine.orders.models;
 
 import com.dayworks_ltd.loyalty_engine.common.OrderStatus;
+import com.dayworks_ltd.loyalty_engine.common.PaymentMode;
 import com.dayworks_ltd.loyalty_engine.inventory.models.StockTransfer;
 import com.dayworks_ltd.loyalty_engine.merchants.Merchant;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
@@ -40,6 +41,10 @@ public class Order {
 
     @Column(nullable = false)
     private LocalDateTime orderDate;
+
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false)
+    private PaymentMode paymentMode;
 
     private LocalDateTime paymentDate;
 

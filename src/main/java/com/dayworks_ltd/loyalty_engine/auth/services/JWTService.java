@@ -50,6 +50,9 @@ public class JWTService {
             claims.put("businessType", businessType);
         }
         claims.put("isWholesaler", user.getIsWholesaler());
+        claims.put("tillNumber", user.getTillNumber());
+        claims.put("businessPhone", user.getBusinessPhone());
+        claims.put("location", user.getLocation());
 
         String token = builder()
                 .claims(claims)

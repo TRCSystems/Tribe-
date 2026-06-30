@@ -5,13 +5,13 @@ import com.dayworks_ltd.loyalty_engine.auth.model.CustomUserDetails;
 import com.dayworks_ltd.loyalty_engine.auth.model.User;
 import com.dayworks_ltd.loyalty_engine.auth.repository.UserRepository;
 import com.dayworks_ltd.loyalty_engine.common.OrderStatus;
+import com.dayworks_ltd.loyalty_engine.common.PaymentMode;
+import com.dayworks_ltd.loyalty_engine.dto.CreateMerchantRequest;
 import com.dayworks_ltd.loyalty_engine.inventory.models.StockTransfer;
 import com.dayworks_ltd.loyalty_engine.merchants.Merchant;
+import com.dayworks_ltd.loyalty_engine.merchants.MerchantRepository;
 import com.dayworks_ltd.loyalty_engine.merchants.MerchantService;
-import com.dayworks_ltd.loyalty_engine.orders.dto.MerchantSummaryDTO;
-import com.dayworks_ltd.loyalty_engine.orders.dto.OrderItemDTO;
-import com.dayworks_ltd.loyalty_engine.orders.dto.OrderRequest;
-import com.dayworks_ltd.loyalty_engine.orders.dto.OrderResponseDTO;
+import com.dayworks_ltd.loyalty_engine.orders.dto.*;
 import com.dayworks_ltd.loyalty_engine.orders.models.Order;
 import com.dayworks_ltd.loyalty_engine.orders.models.OrderItem;
 import com.dayworks_ltd.loyalty_engine.orders.services.OrderService;
@@ -27,6 +27,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
+
 @RestController
 @RequestMapping("/api/v1/orders")
 @RequiredArgsConstructor
@@ -35,12 +36,56 @@ public class OrderController {
     private final OrderService orderService;
     private final UserRepository userRepository;
     private final MerchantService merchantService;
+    private final MerchantRepository merchantRepository;
 
     private static final Logger logger = LoggerFactory.getLogger(OrderController.class);
 
     /**
      * Merchant creates a new order + initiates M-Pesa STK Push
      */
+
+    @GetMapping("/merchants/search")
+    public ResponseEntity<?> searchMerchants(@RequestParam String query) {
+        List<Merchant> matches = merchantService.search(query);
+        return ResponseEntity.ok(Map.of(
+                "status", "SUCCESS",
+                "results", matches
+        ));
+    }
+    @PostMapping("/merchants/create")
+    public ResponseEntity<?> createMerchant(
+            @AuthenticationPrincipal CustomUserDetails repDetails,
+            @RequestBody CreateMerchantRequest request) {
+
+        if (repDetails == null) {
+            return ResponseEntity.status(401).body(Map.of(
+                    "status", "ERROR",
+                    "message", "Unauthorized"
+            ));
+        }
+
+        try {
+            Merchant merchant = merchantService.createMerchantFromOrder(request, repDetails.getUserId());
+            return ResponseEntity.ok(Map.of(
+                    "status", "SUCCESS",
+                    "merchantId", merchant.getId(),
+                    "businessName", merchant.getBusinessName()
+            ));
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().body(Map.of(
+                    "status", "FAILURE",
+                    "statusCode", 400,
+                    "message", e.getMessage()
+            ));
+        } catch (Exception e) {
+            logger.info("Error creating merchant from order", e);
+            return ResponseEntity.internalServerError().body(Map.of(
+                    "status", "ERROR",
+                    "statusCode", 500,
+                    "message", "Failed to create merchant"
+            ));
+        }
+    }
     @PostMapping("/create")
     @Operation(summary = "Create Order and Initiate Payment")
     public ResponseEntity<?> createOrder(
@@ -55,37 +100,37 @@ public class OrderController {
         }
 
         try {
-            // === RESOLVE REAL MERCHANT ID (Same pattern as your daily-summary) ===
             Long userId = userDetails.getUserId();
-            Optional<User> userOpt = userRepository.findById(userId);
+            User user = userRepository.findById(userId)
+                    .orElseThrow(() -> new IllegalArgumentException("User not found"));
 
-            if (userOpt.isEmpty()) {
+            String distributorMerchantId = user.getMerchantId();
+
+            if (distributorMerchantId == null || distributorMerchantId.isBlank()) {
                 return ResponseEntity.badRequest().body(Map.of(
                         "status", "FAILURE",
                         "statusCode", 400,
-                        "message", "User not found"
+                        "message", "This user is not linked to any merchant/distributor"
                 ));
             }
 
-            User user = userOpt.get();
-            String merchantId = user.getMerchantId();
-
-            if (merchantId == null || merchantId.isBlank()) {
+            // Validate that client sent the target merchantId
+            if (request.getMerchantId() == null) {
                 return ResponseEntity.badRequest().body(Map.of(
                         "status", "FAILURE",
                         "statusCode", 400,
-                        "message", "This user is not linked to any merchant"
+                        "message", "merchantId is required"
                 ));
             }
 
-            // Create Order + Initiate Payment
-            Order order = orderService.createOrder(merchantId, request);
+            Order order = orderService.createOrder(distributorMerchantId, request);
 
             return ResponseEntity.ok(Map.of(
                     "status", "SUCCESS",
                     "message", "Order created successfully. M-Pesa prompt sent to your phone.",
                     "orderCode", order.getOrderCode(),
-                    "merchantId", merchantId,
+                    "distributorId", distributorMerchantId,
+                    "merchantId", request.getMerchantId(),
                     "totalAmount", order.getTotalAmount()
             ));
 
@@ -237,6 +282,8 @@ public class OrderController {
         }
     }
 
+
+
     @PostMapping("/{orderCode}/receive")
     @Operation(summary = "Merchant confirms stock receipt by entering order code from receipt")
     public ResponseEntity<?> receiveOrder(
@@ -372,13 +419,11 @@ public class OrderController {
     @GetMapping("/distributor/status/{status}")
     public ResponseEntity<?> getDistributorOrdersByStatus(
             @AuthenticationPrincipal CustomUserDetails userDetails,
-            @PathVariable OrderStatus status) {
+            @PathVariable OrderStatus status,
+            @RequestParam(required = false) PaymentMode paymentMode) {
 
         if (userDetails == null) {
-            return ResponseEntity.status(401).body(Map.of(
-                    "status", "ERROR",
-                    "message", "Unauthorized"
-            ));
+            return ResponseEntity.status(401).body(Map.of("status", "ERROR", "message", "Unauthorized"));
         }
 
         try {
@@ -386,22 +431,16 @@ public class OrderController {
             Optional<User> userOpt = userRepository.findById(userId);
 
             if (userOpt.isEmpty()) {
-                return ResponseEntity.badRequest().body(Map.of(
-                        "status", "FAILURE",
-                        "message", "User not found"
-                ));
+                return ResponseEntity.badRequest().body(Map.of("status", "FAILURE", "message", "User not found"));
             }
 
             String merchantId = userOpt.get().getMerchantId();
 
             if (merchantId == null || merchantId.isBlank()) {
-                return ResponseEntity.badRequest().body(Map.of(
-                        "status", "FAILURE",
-                        "message", "User is not linked to any distributor"
-                ));
+                return ResponseEntity.badRequest().body(Map.of("status", "FAILURE", "message", "User is not linked to any distributor"));
             }
 
-            List<Order> orders = orderService.getOrdersByDistributorAndStatus(merchantId, status);
+            List<Order> orders = orderService.getOrdersByDistributorAndStatus(merchantId, status, paymentMode);
 
             List<OrderResponseDTO> responseData = orders.stream()
                     .map(this::mapToOrderResponseDTO)
@@ -411,55 +450,47 @@ public class OrderController {
                     "status", "SUCCESS",
                     "role", "DISTRIBUTOR",
                     "filterStatus", status.name(),
+                    "filterPaymentMode", paymentMode != null ? paymentMode.name() : "ALL",
                     "count", responseData.size(),
                     "data", responseData
             ));
 
         } catch (Exception e) {
             logger.error("Error fetching distributor orders", e);
-            return ResponseEntity.internalServerError().body(Map.of(
-                    "status", "ERROR",
-                    "message", "Failed to fetch orders"
-            ));
+            return ResponseEntity.internalServerError().body(Map.of("status", "ERROR", "message", "Failed to fetch orders"));
         }
     }
 
-    private ResponseEntity<?> getOrdersByRoleAndStatus(
-            CustomUserDetails userDetails, OrderStatus status, boolean isDistributor) {
+    @PostMapping("/{orderCode}/collect-payment")
+    @Operation(summary = "Field agent collects payment for PAY_ON_DELIVERY order via STK")
+    public ResponseEntity<?> collectPayment(
+            @AuthenticationPrincipal CustomUserDetails userDetails,
+            @PathVariable String orderCode,
+            @RequestBody(required = false) CollectPaymentRequest request) {
 
         if (userDetails == null) {
             return ResponseEntity.status(401).body(Map.of("status", "ERROR", "message", "Unauthorized"));
         }
 
         try {
-            String merchantId = getMerchantIdFromUser(userDetails);
-            List<Order> orders;
+            String overridePhone = (request != null) ? request.getPhoneNumber() : null;
 
-            if (isDistributor) {
-                orders = orderService.getOrdersByDistributorAndStatus(merchantId, status);
-            } else {
-                orders = orderService.getOrdersByMerchantAndStatus(merchantId, status);
-            }
-
-            String role = isDistributor ? "DISTRIBUTOR" : "MERCHANT";
+            Map<String, Object> result = orderService.collectDeliveryPayment(orderCode, overridePhone);
 
             return ResponseEntity.ok(Map.of(
                     "status", "SUCCESS",
-                    "role", role,
-                    "filterStatus", status.name(),
-                    "count", orders.size(),
-                    "data", orders
+                    "message", "STK push sent",
+                    "data", result
             ));
 
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().body(Map.of("status", "FAILURE", "message", e.getMessage()));
         } catch (Exception e) {
-            logger.error("Error fetching orders for {} with status {}",
-                    isDistributor ? "distributor" : "merchant", status, e);
-            return ResponseEntity.internalServerError().body(Map.of(
-                    "status", "ERROR",
-                    "message", e.getMessage()
-            ));
+            logger.info("Error collecting payment for order {}", orderCode, e);
+            return ResponseEntity.internalServerError().body(Map.of("status", "ERROR", "message", "Failed to initiate payment collection"));
         }
     }
+
 
     private String getMerchantIdFromUser(CustomUserDetails userDetails) {
         Long userId = userDetails.getUserId();
@@ -516,6 +547,14 @@ public class OrderController {
     }
 
 
+
+    private String normalizePhone(String raw) {
+        String digits = raw.replaceAll("[^0-9]", "");
+        if (digits.startsWith("254")) return "0" + digits.substring(3);
+        if (digits.startsWith("0")) return digits;
+        if (digits.length() == 9) return "0" + digits; // missing leading 0
+        return digits;
+    }
 
 
 }

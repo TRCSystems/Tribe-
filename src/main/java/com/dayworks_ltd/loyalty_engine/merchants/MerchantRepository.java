@@ -20,4 +20,8 @@ public interface MerchantRepository extends JpaRepository<Merchant, Long>{
         """,
             nativeQuery = true)
     List<Merchant> findLiquorWholesalers(@Param("businessType") String businessType);
+
+    List<Merchant> findByBusinessPhone(String businessPhone);
+
+    List<Merchant> findByBusinessNameContainingIgnoreCase(String businessName);
 }

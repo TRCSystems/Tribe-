@@ -25,6 +25,7 @@ import org.springframework.web.client.RestTemplate;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import com.dayworks_ltd.loyalty_engine.common.PaymentMode;
 import java.util.*;
 
 @Service
@@ -47,28 +48,33 @@ public class OrderService {
      * Create Order + Initiate M-Pesa STK Push
      */
     @Transactional
-    public Order createOrder(String merchantId, OrderRequest request) {
+    public Order createOrder(String distributorMerchantId, OrderRequest request) {
 
-        Merchant distributor = merchantRepository.findById(request.getDistributorId())
+        // Distributor comes from logged-in user
+        Merchant distributor = merchantRepository.findById(Long.parseLong(distributorMerchantId))
                 .orElseThrow(() -> new IllegalArgumentException("Distributor not found"));
 
-        Merchant merchant = merchantRepository.findById(Long.parseLong(merchantId))
+        // Merchant (retailer) comes from request body
+        Merchant merchant = merchantRepository.findById(Long.valueOf(request.getMerchantId()))
                 .orElseThrow(() -> new IllegalArgumentException("Merchant not found"));
 
         String orderCode = generateOrderCode();
-
         BigDecimal calculatedTotal = calculateTotal(request.getItems());
 
+        OrderStatus initialStatus = request.getPaymentMode() == PaymentMode.PAY_ON_DELIVERY
+                ? OrderStatus.PENDING
+                : OrderStatus.PENDING_PAYMENT;
 
-        // Create Order
         Order order = Order.builder()
                 .orderCode(orderCode)
-                .merchant(merchant)
-                .distributor(distributor)
+                .merchant(merchant)           // Retailer
+                .distributor(distributor)     // Logged-in Distributor
                 .orderDate(LocalDateTime.now())
-                .status(OrderStatus.PENDING)
+                .status(initialStatus)
+                .paymentMode(request.getPaymentMode())
                 .totalAmount(calculatedTotal)
-                .phoneNumber(request.getPhoneNumber())                .build();
+                .phoneNumber(request.getPhoneNumber())
+                .build();
 
         for (OrderItemRequest itemReq : request.getItems()) {
             OrderItem item = OrderItem.builder()
@@ -77,42 +83,58 @@ public class OrderService {
                     .itemName(itemReq.getItemName())
                     .quantity(itemReq.getQuantity())
                     .wholesalePrice(itemReq.getWholesalePrice())
-                    .lineTotal(itemReq.getWholesalePrice().multiply(BigDecimal.valueOf(itemReq.getQuantity())))
+                    .lineTotal(itemReq.getWholesalePrice()
+                            .multiply(BigDecimal.valueOf(itemReq.getQuantity())))
                     .build();
-
             order.addItem(item);
         }
+
+        // PREPAID: STK Push
+        if (request.getPaymentMode() == PaymentMode.PREPAID) {
+            String checkoutRequestId = initiateStkPush(
+                    request.getPhoneNumber(),
+                    calculatedTotal,
+                    orderCode
+            );
+            order.setCheckoutRequestId(checkoutRequestId);
+        }
+
         Order savedOrder = orderRepository.save(order);
 
-        // === INITIATE STK PUSH ===
-        try {
-            Map<String, Object> stkRequest = Map.of(
-                    "phoneNumber", request.getPhoneNumber(),
-                    "amount", calculatedTotal
-            );
-
-            ResponseEntity<Map> response = restTemplate.postForEntity(
-                    paymentBaseUrl + "/api/v1/payment/initiate-stk-push",
-                    stkRequest,
-                    Map.class
-            );
-
-            if (response.getStatusCode().is2xxSuccessful() && response.getBody() != null) {
-                Map<String, Object> data = (Map<String, Object>) response.getBody().get("data");
-                String checkoutRequestId = (String) data.get("CheckoutRequestID");
-
-                savedOrder.setCheckoutRequestId(checkoutRequestId);
-                orderRepository.save(savedOrder);
-
-                log.info("STK Push initiated for Order {} | CheckoutRequestID: {}", orderCode, checkoutRequestId);
-            }
-        } catch (Exception e) {
-            log.error("Failed to initiate STK Push for order {}", orderCode, e);
+        if (request.getPaymentMode() == PaymentMode.PAY_ON_DELIVERY) {
+            log.info("PAY_ON_DELIVERY order {} created by distributor {} for merchant {}",
+                    orderCode, distributorMerchantId, request.getMerchantId());
         }
 
         return savedOrder;
     }
+    // Extracted STK method — throws if it fails, @Transactional rolls everything back
+    private String initiateStkPush(String phoneNumber, BigDecimal amount, String orderCode) {
+        Map<String, Object> stkRequest = Map.of(
+                "phoneNumber", phoneNumber,
+                "amount", amount
+        );
 
+        ResponseEntity<Map> response = restTemplate.postForEntity(
+                paymentBaseUrl + "/api/v1/payment/initiate-stk-push",
+                stkRequest,
+                Map.class
+        );
+
+        if (!response.getStatusCode().is2xxSuccessful() || response.getBody() == null) {
+            throw new RuntimeException("Payment initiation failed for order " + orderCode);
+        }
+
+        Map<String, Object> data = (Map<String, Object>) response.getBody().get("data");
+        String checkoutRequestId = (String) data.get("CheckoutRequestID");
+
+        if (checkoutRequestId == null || checkoutRequestId.isBlank()) {
+            throw new RuntimeException("Invalid STK response — no CheckoutRequestID for order " + orderCode);
+        }
+
+        log.info("STK Push initiated for order {} | CheckoutRequestID: {}", orderCode, checkoutRequestId);
+        return checkoutRequestId;
+    }
     /**
      * Check Payment Status
      */
@@ -205,6 +227,14 @@ public class OrderService {
     /**
      * Get orders for a Distributor by status
      */
+    public List<Order> getOrdersByDistributorAndStatus(String distributorId, OrderStatus status, PaymentMode paymentMode) {
+        if (paymentMode != null) {
+            return orderRepository.findByDistributorAndStatusAndPaymentMode(Long.valueOf(distributorId), status, paymentMode);
+        }
+        return orderRepository.findByDistributorIdAndStatus(
+                Long.parseLong(distributorId), status);
+    }
+
     public List<Order> getOrdersByDistributorAndStatus(String distributorId, OrderStatus status) {
         return orderRepository.findByDistributorIdAndStatus(
                 Long.parseLong(distributorId), status);
@@ -329,6 +359,44 @@ public class OrderService {
                 .items(items)
                 .notes("Fulfillment for Order: " + order.getOrderCode())
                 .build();
+    }
+
+    @Transactional
+    public Map<String, Object> collectDeliveryPayment(String orderCode, String overridePhone) {
+
+        Order order = orderRepository.findByOrderCode(orderCode)
+                .orElseThrow(() -> new IllegalArgumentException("Order not found"));
+
+        if (order.getPaymentMode() != PaymentMode.PAY_ON_DELIVERY) {
+            throw new IllegalArgumentException("This order is not PAY_ON_DELIVERY");
+        }
+
+        if (order.getStatus() == OrderStatus.PAID || order.getStatus() == OrderStatus.RECEIVED) {
+            throw new IllegalArgumentException("Order already completed — cannot collect payment");
+        }
+
+        String phoneToUse = (overridePhone != null && !overridePhone.isBlank())
+                ? overridePhone
+                : order.getPhoneNumber();
+
+        if (phoneToUse == null || phoneToUse.isBlank()) {
+            throw new IllegalArgumentException("No phone number available for this order");
+        }
+
+        // STK push fires first — nothing is persisted until this succeeds
+        String checkoutRequestId = initiateStkPush(phoneToUse, order.getTotalAmount(), orderCode);
+
+        // Only store checkoutRequestId AFTER the push succeeds — you can't check status
+        // on a request you never made
+        order.setCheckoutRequestId(checkoutRequestId);
+        orderRepository.save(order);
+
+        Map<String, Object> response = new HashMap<>();
+        response.put("orderCode", orderCode);
+        response.put("phoneUsed", phoneToUse);
+        response.put("amount", order.getTotalAmount());
+        response.put("checkoutRequestId", checkoutRequestId);
+        return response;
     }
     @Transactional
     public Order receiveOrder(String orderCode, String receivingMerchantId) {

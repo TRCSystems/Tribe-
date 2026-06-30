@@ -1,5 +1,9 @@
 package com.dayworks_ltd.loyalty_engine.inventory.repositories;
 
+import com.dayworks_ltd.loyalty_engine.inventory.DTO.ItemMarginProjection;
+import com.dayworks_ltd.loyalty_engine.inventory.DTO.MarginTotalsProjection;
+import com.dayworks_ltd.loyalty_engine.inventory.DTO.OrderTypeMarginProjection;
+import com.dayworks_ltd.loyalty_engine.inventory.DTO.SaleLineProjection;
 import com.dayworks_ltd.loyalty_engine.inventory.models.Inventory;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
@@ -39,7 +43,8 @@ public interface InventoryRepository extends JpaRepository<Inventory, Long> {
 
     Optional<Inventory> findByMerchantIdAndItemName(String merchantId, String itemName);
 
-
+    @Query("SELECT i FROM Inventory i WHERE i.merchantId = :merchantId AND i.isActive = true")
+    List<Inventory> findActiveByMerchantId(@Param("merchantId") String merchantId);
 
     List<Inventory> findByMerchantIdAndIsActive(String merchantId, Boolean isActive);
 
@@ -52,4 +57,73 @@ public interface InventoryRepository extends JpaRepository<Inventory, Long> {
             @Param("merchantId") String merchantId,
             @Param("itemName") String itemName);
 
+
+    @Query(value = """
+    SELECT 
+        SUM(quantity) as unitsSold,
+        SUM(COALESCE(unit_price * quantity + discount, 0)) as grossRevenue,
+        SUM(COALESCE(unit_cost * quantity, 0)) as totalCost,
+        SUM(COALESCE((unit_price * quantity + discount) - (unit_cost * quantity), 0)) as grossMargin,
+        ROUND(
+            SUM(COALESCE((unit_price * quantity + discount) - (unit_cost * quantity), 0)) 
+            / NULLIF(SUM(unit_price * quantity + discount), 0) * 100, 2
+        ) as marginPercentage
+    FROM sale_transactions
+    WHERE merchant_id = :merchantId AND sale_date = :date
+    """, nativeQuery = true)
+    MarginTotalsProjection getDailyTotal(@Param("merchantId") String merchantId, @Param("date") LocalDate date);
+
+    @Query(value = """
+    SELECT 
+        order_type as orderType,
+        SUM(quantity) as unitsSold,
+        SUM(COALESCE(unit_price * quantity + discount, 0)) as grossRevenue,
+        SUM(COALESCE(unit_cost * quantity, 0)) as totalCost,
+        SUM(COALESCE((unit_price * quantity + discount) - (unit_cost * quantity), 0)) as grossMargin,
+        ROUND(
+            SUM(COALESCE((unit_price * quantity + discount) - (unit_cost * quantity), 0)) 
+            / NULLIF(SUM(unit_price * quantity + discount), 0) * 100, 2
+        ) as marginPercentage
+    FROM sale_transactions
+    WHERE merchant_id = :merchantId AND sale_date = :date
+    GROUP BY order_type
+    """, nativeQuery = true)
+    List<OrderTypeMarginProjection> getMarginByOrderType(@Param("merchantId") String merchantId, @Param("date") LocalDate date);
+
+    @Query(value = """
+    SELECT 
+        item_code as itemCode,
+        item_name as itemName,
+        order_type as orderType,
+        SUM(quantity) as unitsSold,
+        SUM(COALESCE(unit_price * quantity + discount, 0)) as grossRevenue,
+        SUM(COALESCE(unit_cost * quantity, 0)) as totalCost,
+        SUM(COALESCE((unit_price * quantity + discount) - (unit_cost * quantity), 0)) as grossMargin,
+        ROUND(
+            SUM(COALESCE((unit_price * quantity + discount) - (unit_cost * quantity), 0)) 
+            / NULLIF(SUM(unit_price * quantity + discount), 0) * 100, 2
+        ) as marginPercentage
+    FROM sale_transactions
+    WHERE merchant_id = :merchantId AND sale_date = :date
+    GROUP BY item_code, item_name, order_type
+    ORDER BY grossMargin DESC
+    """, nativeQuery = true)
+    List<ItemMarginProjection> getMarginByItem(@Param("merchantId") String merchantId, @Param("date") LocalDate date);
+
+    @Query("""
+    SELECT 
+        st.transactionRef as transactionRef,
+        st.saleDateTime as saleDatetime,
+        st.customerPhone as customerPhone,
+        st.itemCode as itemCode,
+        st.itemName as itemName,
+        st.quantity as quantity,
+        st.unitPrice as unitPrice,
+        st.totalPrice as totalPrice,
+        st.orderType as orderType
+    FROM SaleTransaction st
+    WHERE st.merchantId = :merchantId AND st.saleDate = :date
+    ORDER BY st.transactionRef, st.saleDateTime
+    """)
+    List<SaleLineProjection> getReconciliationLines(@Param("merchantId") String merchantId, @Param("date") LocalDate date);
 }
