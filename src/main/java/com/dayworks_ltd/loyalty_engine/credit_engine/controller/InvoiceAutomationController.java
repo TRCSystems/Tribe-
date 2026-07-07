@@ -1,5 +1,6 @@
 package com.dayworks_ltd.loyalty_engine.credit_engine.controller;
 
+import com.dayworks_ltd.loyalty_engine.auth.model.CustomUserDetails;
 import com.dayworks_ltd.loyalty_engine.auth.model.User;
 import com.dayworks_ltd.loyalty_engine.auth.repository.UserRepository;
 import com.dayworks_ltd.loyalty_engine.credit_engine.dto.InvoiceExtractionResponse;
@@ -11,8 +12,11 @@ import com.dayworks_ltd.loyalty_engine.credit_engine.service.InvoiceToInventoryS
 import com.dayworks_ltd.loyalty_engine.credit_engine.service.KraEtimsService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
@@ -27,22 +31,36 @@ import java.util.Optional;
 @Slf4j
 public class InvoiceAutomationController {
 
+    private final Logger logger = LoggerFactory.getLogger(InvoiceAutomationController.class);
+
     private final InvoiceAutomationService automationService;
     private final InvoiceToInventorySyncService syncService;
-    private final InvoicePersistenceService persistenceService; // ← injected here
+    private final InvoicePersistenceService persistenceService; // injected here
     private final UserRepository userRepository;
-    private final KraEtimsService kraEtimsService;   // ← Injected here
+    private final KraEtimsService kraEtimsService;   // Injected here
 
     @PostMapping("/upload")
     public ResponseEntity<Map<String, Object>> uploadInvoice(
             @RequestParam("invoice_file") MultipartFile invoiceFile,
-            @RequestParam("merchant_id") String merchantId) {
+            Authentication authentication) {
 
         Map<String, Object> response = new HashMap<>();
 
+        CustomUserDetails loggedInUser = (CustomUserDetails) authentication.getPrincipal();
+        logger.info("UserId: {} Username: {} Role: {} Password: {}",
+                loggedInUser.getUserId(),
+                loggedInUser.getUsername(),
+                loggedInUser.getUserRole(),
+                loggedInUser.getPassword()
+        );
+
+        String principalName = authentication.getName();
+        logger.info("Principal Name: {}", principalName);
+
         try {
-            // ── 1. RESOLVE USER → MERCHANT ────────────────────────────────────
-            Long userId = Long.parseLong(merchantId);
+            // 1. RESOLVE USER  MERCHANT
+//            Long userId = Long.parseLong(merchantId);
+            Long userId = loggedInUser.getUserId();
 
             Optional<User> userOpt = userRepository.findById(userId);
             if (userOpt.isEmpty()) {
@@ -66,19 +84,22 @@ public class InvoiceAutomationController {
 
             log.info("UPLOAD-INVOICE - userId={} resolved to merchantId={}", userId, realMerchantId);
 
-            // ── 2. SUBMIT TO OCR + POLL FOR RESULT ───────────────────────────
+            //  2. SUBMIT TO OCR + POLL FOR RESULT
             InvoiceExtractionResponse submission = automationService.submitInvoiceForProcessing(invoiceFile);
             String submissionId = submission.getInvoiceSubmissionId();
+            logger.info("Obtained submission ID. Beginning poll");
 
             InvoiceExtractionResponse finalResult = pollUntilComplete(submissionId, 12, 5000);
+            logger.info("Finished polling for complete response. Persisting invoice");
 
-            // ── 3. PERSIST SUPPLIER + INVOICE ────────────────────────────────
+            // 3. PERSIST SUPPLIER
             // realMerchantId comes back as String from user.getMerchantId().
-            // SupplierInvoice.merchantId is Long — parse once, here, explicitly.
+            // SupplierInvoice.merchantId is Long parse once, here, explicitly.
             Long resolvedMerchantId = Long.parseLong(realMerchantId);
             SupplierInvoice savedInvoice = persistenceService.persistInvoice(finalResult, resolvedMerchantId);
+            logger.info("Successfully persisted invoice data");
 
-            // ── 4. BUILD RESPONSE ─────────────────────────────────────────────
+            //  4. BUILD RESPONSE
             response.put("success", true);
             response.put("invoiceSubmissionId", submissionId);
             response.put("savedInvoiceId", savedInvoice.getId());
@@ -95,11 +116,11 @@ public class InvoiceAutomationController {
             return ResponseEntity.badRequest().body(Map.of(
                     "status", "FAILURE",
                     "statusCode", 400,
-                    "message", "Invalid merchant_id format — must be a numeric user ID"
+                    "message", "Invalid merchant_id format ΓÇö must be a numeric user ID"
             ));
 
         } catch (InvoicePersistenceService.DuplicateInvoiceException e) {
-            // Same invoice uploaded twice — not a server error, tell the client clearly
+            // Same invoice uploaded twice ΓÇö not a server error, tell the client clearly
             return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of(
                     "status", "DUPLICATE",
                     "statusCode", 409,
@@ -166,7 +187,7 @@ public class InvoiceAutomationController {
         }
     }
 
-    // ── Polling helper ────────────────────────────────────────────────────────
+    // Polling helper
     private InvoiceExtractionResponse pollUntilComplete(
             String submissionId, int maxAttempts, long delayMs) throws TimeoutException {
 
