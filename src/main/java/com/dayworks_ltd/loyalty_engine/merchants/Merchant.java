@@ -1,10 +1,15 @@
 package com.dayworks_ltd.loyalty_engine.merchants;
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import jakarta.persistence.*;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Pattern;
+import lombok.AllArgsConstructor;
+import lombok.Builder;
 import lombok.Data;
+import lombok.NoArgsConstructor;
 
 import java.time.LocalDateTime;
+@JsonIgnoreProperties({"hibernateLazyInitializer", "handler"})
 @Entity
 @Table(
         name = "merchants",
@@ -13,7 +18,9 @@ import java.time.LocalDateTime;
         }
 )
 @Data
-
+@NoArgsConstructor
+@AllArgsConstructor
+@Builder
 public class Merchant {
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
@@ -35,9 +42,9 @@ public class Merchant {
     @Column(name = "location", nullable = false)
     private String location;
 
-    @NotBlank
+
     @Pattern(regexp = "\\d{5,10}", message = "Invalid till number format")
-    @Column(name = "till_number", nullable = false, unique = true)
+    @Column(name = "till_number", unique = true)
     private String tillNumber;
 
     @NotBlank
@@ -83,6 +90,11 @@ public class Merchant {
 
     @Column(name = "meta_sync_error", columnDefinition = "TEXT")
     private String metaSyncError;
+
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "distributor_id")
+    private Merchant distributor;
 
 
 

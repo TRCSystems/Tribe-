@@ -50,4 +50,36 @@ public class CustomUserDetails implements UserDetails {
     public Boolean getIsWholesaler() {
         return user.getIsWholesaler();
     }
+
+    public Long getMerchantId() {
+        return user.getMerchant() != null ? user.getMerchant().getId() : null;
+    }
+
+    public String getBusinessName() {
+        if (user.getMerchant() == null) {
+            return null;
+        }
+        return user.getMerchant().getBusinessName();
+    }
+
+    public String getTillNumber() {
+        if (user.getMerchant() == null) {
+            return null;
+        }
+        return user.getMerchant().getTillNumber();
+    }
+
+    public String getBusinessPhone() {
+        if (user.getMerchant() == null) {
+            return null;
+        }
+        return user.getMerchant().getBusinessPhone();
+    }
+
+    public String getLocation() {
+        if (user.getMerchant() == null) {
+            return null;
+        }
+        return user.getMerchant().getLocation();
+    }
 }

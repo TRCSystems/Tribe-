@@ -76,6 +76,10 @@ public class WebSecurityConfig {
                           // ← Add this line
                         .hasAnyRole(UserRole.ADMIN.name(), UserRole.MERCHANT.name())
 
+                        // === NEW: ORDER MANAGEMENT ===
+                        .requestMatchers("/api/orders/**")
+                        .hasAnyRole(UserRole.ADMIN.name(), UserRole.MERCHANT.name(), UserRole.SALES_PERSON.name())
+
 
                         // CREDIT ENGINE – THIS IS THE LINE YOU WERE MISSING
                         .requestMatchers("/api/v1/credit/**")

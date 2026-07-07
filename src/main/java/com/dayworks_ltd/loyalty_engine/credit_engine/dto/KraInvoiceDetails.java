@@ -13,6 +13,7 @@ public class KraInvoiceDetails {
     private String traderSystemInvoiceNumber;
     private BigDecimal totalInvoiceAmount;
     private BigDecimal totalTaxAmount;
+
     private String salesDate;
     // Add more fields as needed
 }

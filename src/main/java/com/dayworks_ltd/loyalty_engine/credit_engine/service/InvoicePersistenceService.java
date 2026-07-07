@@ -42,49 +42,54 @@ public class InvoicePersistenceService {
         SupplierDTO supplierData = data.getSupplier();
         InvoiceHeaderDTO invoiceData = data.getInvoice();
 
-        // ΓöÇΓöÇ 1. IDEMPOTENCY GUARD ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+        // ── 1. IDEMPOTENCY GUARD ──────────────────────────────────────────────
         // If this submission was already persisted (e.g. retry after timeout),
         // return the existing record instead of double-writing.
         String submissionId = extractionResponse.getInvoiceSubmissionId();
         if (supplierInvoiceRepository.existsBySubmissionId(submissionId)) {
             log.warn("PERSIST-INVOICE - Submission {} already persisted. Skipping duplicate write.", submissionId);
-            // Return existing ΓÇö caller can still show it to the user
+            // Return existing — caller can still show it to the user
             return supplierInvoiceRepository.findAll().stream()  // swap for a proper query if needed
                     .filter(inv -> submissionId.equals(inv.getSubmissionId()))
                     .findFirst()
                     .orElseThrow(() -> new IllegalStateException("Inconsistent state: flag set but record missing for " + submissionId));
         }
 
-        // ΓöÇΓöÇ 2. RESOLVE SUPPLIER (upsert) ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+        // ── 2. RESOLVE SUPPLIER (upsert) ─────────────────────────────────────
         // Strategy: match on KRA PIN first (authoritative). Fall back to
         // normalized name only when PIN is absent (e.g. informal suppliers).
         Supplier supplier = resolveSupplier(supplierData);
 
-        // ΓöÇΓöÇ 3. BUILD INVOICE ENTITY ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+        // ── 3. BUILD INVOICE ENTITY ───────────────────────────────────────────
         SupplierInvoice invoice = SupplierInvoice.builder()
                 .merchantId(merchantId)
                 .supplierId(supplier.getId())
                 .invoiceNumber(invoiceData.getInvoiceNumber())
-                .invoiceDate(invoiceData.getDate())              // already LocalDate ΓÇö no parse needed
+                .kraControlUnitInvoiceNo(invoiceData.getCuin())
+                .invoiceDate(invoiceData.getDate())              // already LocalDate — no parse needed
                 .subtotal(invoiceData.getSubtotal())             // already BigDecimal
                 .vat(invoiceData.getVat())                       // already BigDecimal
-                .total(invoiceData.getTotal())                   // already BigDecimal
+                .total(invoiceData.getTotal())
+                .kraVerificationStatus("PENDING")
+                .kraVerificationAttempts(0)
+                .kraApproved(false)// already BigDecimal
                 .ocrConfidence(data.getConfidence())             // already BigDecimal
                 .submissionId(submissionId)
+
                 .build();
 
         // generateHash() is also called in @PrePersist, but calling it
         // here lets us check for a duplicate *before* hitting the DB.
         invoice.generateHash();
 
-        // ΓöÇΓöÇ 4. DUPLICATE INVOICE GUARD (hash check) ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+        // ── 4. DUPLICATE INVOICE GUARD (hash check) ───────────────────────────
         if (supplierInvoiceRepository.findByInvoiceHash(invoice.getInvoiceHash()).isPresent()) {
             log.warn("PERSIST-INVOICE - Duplicate invoice detected for hash {}. Merchant {} tried to re-upload invoice {}.",
                     invoice.getInvoiceHash(), merchantId, invoiceData.getInvoiceNumber());
-//            throw new DuplicateInvoiceException(
-//                    "This invoice has already been uploaded.",
-//                    invoiceData.getInvoiceNumber()
-//            );
+            throw new DuplicateInvoiceException(
+                    "This invoice has already been uploaded.",
+                    invoiceData.getInvoiceNumber()
+            );
         }
 
         SupplierInvoice saved = supplierInvoiceRepository.save(invoice);
@@ -129,7 +134,7 @@ public class InvoicePersistenceService {
         String pin = supplierData.getPin();
         String rawName = supplierData.getName();
 
-        // Normalize name the same way @PrePersist does ΓÇö keeps lookups consistent.
+        // Normalize name the same way @PrePersist does — keeps lookups consistent.
         String normalizedName = rawName == null ? null :
                 rawName.toLowerCase()
                         .replaceAll("[^a-z0-9\\s]", "")
@@ -140,7 +145,7 @@ public class InvoicePersistenceService {
         if (pin != null && !pin.isBlank()) {
             return supplierRepository.findByPin(pin)
                     .map(existing -> {
-                        // Supplier exists ΓÇö optionally update stale phone number
+                        // Supplier exists — optionally update stale phone number
                         boolean dirty = false;
                         if (supplierData.getPhone() != null && !supplierData.getPhone().equals(existing.getPhone())) {
                             existing.setPhone(supplierData.getPhone());
@@ -161,8 +166,8 @@ public class InvoicePersistenceService {
                     .orElseGet(() -> createNewSupplier(rawName, normalizedName, null, supplierData.getPhone()));
         }
 
-        // Should never happen ΓÇö validation upstream should catch this
-        throw new IllegalArgumentException("Supplier data has neither PIN nor name ΓÇö cannot persist.");
+        // Should never happen — validation upstream should catch this
+        throw new IllegalArgumentException("Supplier data has neither PIN nor name — cannot persist.");
     }
 
     private Supplier createNewSupplier(String name, String normalizedName, String pin, String phone) {
@@ -177,7 +182,7 @@ public class InvoicePersistenceService {
         return saved;
     }
 
-    // ΓöÇΓöÇ Domain exception ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+    // ── Domain exception ──────────────────────────────────────────────────────
     public static class DuplicateInvoiceException extends RuntimeException {
         private final String invoiceNumber;
         public DuplicateInvoiceException(String message, String invoiceNumber) {

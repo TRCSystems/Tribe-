@@ -12,6 +12,7 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.util.Objects;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -32,12 +33,32 @@ public class InvoiceAutomationService {
             System.out.println("Size: " + invoiceFile.getSize() + " bytes");
 
             // Validate file
-            if (invoiceFile == null || invoiceFile.isEmpty()) {
+            if (invoiceFile.isEmpty()) {
                 throw new IllegalArgumentException("Invoice file is required");
             }
 
-            if (!"application/pdf".equals(invoiceFile.getContentType())) {
-                throw new IllegalArgumentException("Only PDF files are supported");
+            String contentType = invoiceFile.getContentType();
+            if (contentType == null) {
+                throw new IllegalArgumentException("Unable to determine file type");
+            }
+
+            // Allow PDF and common image formats
+            boolean isSupported = "application/pdf".equals(contentType) ||
+                    "image/png".equals(contentType) ||
+                    "image/jpeg".equals(contentType) ||
+                    "image/jpg".equals(contentType);
+
+            if (!isSupported) {
+                throw new IllegalArgumentException("Only PDF, PNG, and JPEG files are supported");
+            }
+
+            // Optional: Additional validation by file extension
+            String filename = Objects.requireNonNull(invoiceFile.getOriginalFilename()).toLowerCase();
+            if (!filename.endsWith(".pdf") &&
+                    !filename.endsWith(".png") &&
+                    !filename.endsWith(".jpg") &&
+                    !filename.endsWith(".jpeg")) {
+                throw new IllegalArgumentException("File extension not supported");
             }
 
             // Create multipart request

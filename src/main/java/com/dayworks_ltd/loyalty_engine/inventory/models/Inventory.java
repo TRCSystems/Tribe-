@@ -84,8 +84,15 @@ public class Inventory {
     @Column(name = "last_updated")
     private LocalDateTime lastUpdated = LocalDateTime.now();
 
+    @Column(name = "last_restock_date")
+    private LocalDateTime lastRestockDate;
+
     @Column(name = "product_brand")
     private String productBrand;
+
+
+    @Column(name = "wholesale_price", precision = 10, scale = 2)
+    private BigDecimal wholesalePrice;
 
     @Column(nullable = false)
     private LocalDate recordDate = LocalDate.now();
@@ -103,5 +110,12 @@ public class Inventory {
                 && unitPrice != null && soldStock != null && soldStock > 0) {
             this.totalSales = unitPrice.multiply(BigDecimal.valueOf(soldStock));
         }
+    }
+    public void applyRestock(int quantity, BigDecimal buyingPrice) {
+        this.addedStock = (this.addedStock != null ? this.addedStock : 0) + quantity;
+        this.wholesalePrice = buyingPrice;
+        this.lastRestockDate = LocalDateTime.now();
+        this.lastUpdated = LocalDateTime.now();
+        computeAvailableStock();
     }
 }

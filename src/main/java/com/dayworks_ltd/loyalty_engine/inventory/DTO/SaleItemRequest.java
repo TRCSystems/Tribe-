@@ -9,4 +9,6 @@ public class SaleItemRequest {
     private Long inventoryId;
     private int quantity;
     private BigDecimal discount;  // positive = discount, negative = extra charge, null = 0
+    private String orderType;
+
 }

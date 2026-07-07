@@ -2,16 +2,14 @@ package com.dayworks_ltd.loyalty_engine.inventory.services;
 
 import com.dayworks_ltd.loyalty_engine.auth.model.User;
 import com.dayworks_ltd.loyalty_engine.inventory.DTO.*;
-import com.dayworks_ltd.loyalty_engine.inventory.models.DailySalesSummary;
-import com.dayworks_ltd.loyalty_engine.inventory.models.Expense;
-import com.dayworks_ltd.loyalty_engine.inventory.models.Inventory;
-import com.dayworks_ltd.loyalty_engine.inventory.repositories.DailySalesSummaryRepository;
-import com.dayworks_ltd.loyalty_engine.inventory.repositories.ExpenseRepository;
-import com.dayworks_ltd.loyalty_engine.inventory.repositories.InventoryRepository;
+import com.dayworks_ltd.loyalty_engine.inventory.models.*;
+import com.dayworks_ltd.loyalty_engine.inventory.repositories.*;
 import jakarta.transaction.Transactional;
+import lombok.extern.slf4j.Slf4j;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.apache.poi.ss.usermodel.*;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
@@ -25,21 +23,32 @@ import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.*;
+import java.util.stream.Collectors;
 
+@Slf4j
 @Service
 public class InventoryService {
 
     @Autowired
     private InventoryRepository inventoryRepository;
+
+    @Autowired
+    private WholesalePriceConfigRepository wholesalePriceConfigRepository;
     @Autowired
     private DailySalesSummaryRepository dailySalesSummaryRepository;
 
     private final ExpenseRepository expenseRepository;
 
+    private final RecurringExpenseRepository recurringExpenseRepository;
+
+    private final InventoryStockAuditRepository auditRepository;
+
     private final Logger logger = LoggerFactory.getLogger(InventoryService.class);
 
-    public InventoryService(ExpenseRepository expenseRepository) {
+    public InventoryService(ExpenseRepository expenseRepository, RecurringExpenseRepository recurringExpenseRepository, InventoryStockAuditRepository auditRepository) {
         this.expenseRepository = expenseRepository;
+        this.recurringExpenseRepository = recurringExpenseRepository;
+        this.auditRepository = auditRepository;
     }
 
     public Inventory getInventoryItemById(Long id)
@@ -47,6 +56,54 @@ public class InventoryService {
         Optional<Inventory> item = inventoryRepository.findById(id);
         return item.isPresent() ? item.get() : null;
     }
+    public MarginReportDto getMarginReport(String merchantId, LocalDate date) {
+        MarginTotalsProjection totalProj = inventoryRepository.getDailyTotal(merchantId, date);
+        List<OrderTypeMarginProjection> orderTypeProj = inventoryRepository.getMarginByOrderType(merchantId, date);
+        List<ItemMarginProjection> itemProj = inventoryRepository.getMarginByItem(merchantId, date);
+
+        MarginReportDto report = new MarginReportDto();
+        report.setDate(date);
+        report.setMerchantId(merchantId);
+        report.setDailyTotal(mapTotals(totalProj));
+        report.setByOrderType(orderTypeProj.stream().map(this::mapOrderType).toList());
+        report.setByItem(itemProj.stream().map(this::mapItem).toList());
+        return report;
+    }
+
+    private MarginTotalsDto mapTotals(MarginTotalsProjection p) {
+        MarginTotalsDto dto = new MarginTotalsDto();
+        dto.setUnitsSold(p.getUnitsSold() != null ? p.getUnitsSold() : 0);
+        dto.setGrossRevenue(p.getGrossRevenue() != null ? p.getGrossRevenue() : BigDecimal.ZERO);
+        dto.setTotalCost(p.getTotalCost() != null ? p.getTotalCost() : BigDecimal.ZERO);
+        dto.setGrossMargin(p.getGrossMargin() != null ? p.getGrossMargin() : BigDecimal.ZERO);
+        dto.setMarginPercentage(p.getMarginPercentage() != null ? p.getMarginPercentage() : BigDecimal.ZERO);
+        return dto;
+    }
+
+    private OrderTypeMarginDto mapOrderType(OrderTypeMarginProjection p) {
+        OrderTypeMarginDto dto = new OrderTypeMarginDto();
+        dto.setOrderType(p.getOrderType());
+        dto.setUnitsSold(p.getUnitsSold());
+        dto.setGrossRevenue(p.getGrossRevenue());
+        dto.setTotalCost(p.getTotalCost());
+        dto.setGrossMargin(p.getGrossMargin());
+        dto.setMarginPercentage(p.getMarginPercentage());
+        return dto;
+    }
+
+    private ItemMarginDto mapItem(ItemMarginProjection p) {
+        ItemMarginDto dto = new ItemMarginDto();
+        dto.setItemCode(p.getItemCode());
+        dto.setItemName(p.getItemName());
+        dto.setOrderType(p.getOrderType());
+        dto.setUnitsSold(p.getUnitsSold());
+        dto.setGrossRevenue(p.getGrossRevenue());
+        dto.setTotalCost(p.getTotalCost());
+        dto.setGrossMargin(p.getGrossMargin());
+        dto.setMarginPercentage(p.getMarginPercentage());
+        return dto;
+    }
+
 
     @Transactional
     public void importFromExcel(MultipartFile file, String merchantId) {
@@ -113,7 +170,7 @@ public class InventoryService {
                                     .deductions(BigDecimal.ZERO)
                                     .expenseNote("")
                                     .recordDate(today)
-                                    .closingStock(-1)
+                                    .closingStock(startingStock)
                                     .build();
                         }
 
@@ -251,26 +308,29 @@ public class InventoryService {
         return new BatchAddResult(added, skipped);
     }
 
-   @Transactional
+    @Transactional
     public List<Inventory> recordMultipleSales(SaleRequest request) {
         List<Inventory> updatedItems = new ArrayList<>();
 
         for (SaleItemRequest itemReq : request.getItems()) {
-
             if (itemReq.getQuantity() <= 0) {
-                throw new IllegalArgumentException("Invalid quantity for item ID " + itemReq.getInventoryId() + ". Quantity must be greater than zero.");
+                throw new IllegalArgumentException("Invalid quantity for item ID " + itemReq.getInventoryId());
             }
             Inventory item = inventoryRepository.findById(itemReq.getInventoryId())
                     .orElseThrow(() -> new RuntimeException("Item not found"));
 
-            LocalDate today = LocalDate.now();
+            // snapshot BEFORE
+            int availBefore = item.getAvailableStock();
+            int soldBefore = item.getSoldStock() == null ? 0 : item.getSoldStock();
+            BigDecimal totalBefore = item.getTotalSales() == null ? BigDecimal.ZERO : item.getTotalSales();
 
+            LocalDate today = LocalDate.now();
             if (!today.equals(item.getRecordDate())) {
                 item.setRecordDate(today);
                 item.setStartingStock(item.getAvailableStock());
                 item.setSoldStock(0);
                 item.setAddedStock(0);
-                item.setDeductions(BigDecimal.valueOf(0));
+                item.setDeductions(BigDecimal.ZERO);
                 item.setTotalSales(BigDecimal.ZERO);
             }
 
@@ -285,13 +345,29 @@ public class InventoryService {
             item.setSoldStock(newSold);
             item.setAvailableStock(newAvailable);
             item.setClosingStock(newAvailable);
-            item.setTotalSales(
-                    item.getTotalSales() == null ? saleAmount : item.getTotalSales().add(saleAmount)
-            );
+            item.setTotalSales(item.getTotalSales() == null ? saleAmount : item.getTotalSales().add(saleAmount));
+            item.setLastUpdated(LocalDateTime.now());
 
-            updatedItems.add(inventoryRepository.save(item));
+            Inventory saved = inventoryRepository.save(item);
+            updatedItems.add(saved);
+
+            // snapshot AFTER + write audit row, same transaction
+            auditRepository.save(InventoryStockAudit.builder()
+                    .inventoryId(saved.getId())
+                    .itemCode(saved.getItemCode())
+                    .merchantId(saved.getMerchantId())
+                    .actionType("SALE")
+                    .availableStockBefore(availBefore)
+                    .availableStockAfter(saved.getAvailableStock())
+                    .soldStockBefore(soldBefore)
+                    .soldStockAfter(saved.getSoldStock())
+                    .totalSalesBefore(totalBefore)
+                    .totalSalesAfter(saved.getTotalSales())
+//                    .reference(request.getTransactionRef() != null ? request.getTransactionRef() : "N/A")
+                    .performedBy(request.getMerchantId())
+                    .createdAt(LocalDateTime.now())
+                    .build());
         }
-
         return updatedItems;
     }
 
@@ -310,7 +386,54 @@ public class InventoryService {
         item.setDeductions(item.getDeductions().add(amount));
         return inventoryRepository.save(item);
     }
-
+//
+//@Transactional
+//public List<Inventory> addMultipleStock(StockRequest request, String realMerchantId) {
+//    List<Inventory> updatedItems = new ArrayList<>();
+//
+//    for (StockItemRequest itemReq : request.getItems()) {
+//        if (itemReq.getQuantity() <= 0) {
+//            throw new IllegalArgumentException(
+//                    "Invalid quantity for item ID " + itemReq.getInventoryId() + ". Must be greater than zero."
+//            );
+//        }
+//
+//        Inventory item = inventoryRepository.findById(itemReq.getInventoryId())
+//                .orElseThrow(() -> new RuntimeException("Item not found"));
+//
+//        // Security check: use the REAL merchantId we resolved in controller
+//        if (!realMerchantId.equals(item.getMerchantId())) {
+//            throw new IllegalArgumentException(
+//                    "Item " + item.getItemName() + " does not belong to the authenticated merchant"
+//            );
+//        }
+//
+//        LocalDate today = LocalDate.now();
+//
+//        // If the item's record date is not today, reset it and carry forward stock
+//        if (!today.equals(item.getRecordDate())) {
+//            item.setRecordDate(today);
+//            item.setStartingStock(item.getAvailableStock());
+//            item.setSoldStock(0);
+//            item.setAddedStock(0);
+//            item.setDeductions(BigDecimal.ZERO);
+//            item.setTotalSales(BigDecimal.ZERO);
+//            item.setGrossSales(BigDecimal.ZERO);
+//            item.setNetlSales(BigDecimal.ZERO);
+//        }
+//
+//        // Add the new stock quantity
+//        int currentAdded = item.getAddedStock() == null ? 0 : item.getAddedStock();
+//        item.setAddedStock(currentAdded + itemReq.getQuantity());
+//
+//        // Recalculate available stock
+//        item.computeAvailableStock();
+//
+//        updatedItems.add(inventoryRepository.save(item));
+//    }
+//
+//    return updatedItems;
+//}
 @Transactional
 public List<Inventory> addMultipleStock(StockRequest request, String realMerchantId) {
     List<Inventory> updatedItems = new ArrayList<>();
@@ -325,16 +448,17 @@ public List<Inventory> addMultipleStock(StockRequest request, String realMerchan
         Inventory item = inventoryRepository.findById(itemReq.getInventoryId())
                 .orElseThrow(() -> new RuntimeException("Item not found"));
 
-        // Security check: use the REAL merchantId we resolved in controller
         if (!realMerchantId.equals(item.getMerchantId())) {
             throw new IllegalArgumentException(
                     "Item " + item.getItemName() + " does not belong to the authenticated merchant"
             );
         }
 
-        LocalDate today = LocalDate.now();
+        // snapshot BEFORE
+        int availBefore = item.getAvailableStock();
+        int addedBefore = item.getAddedStock() == null ? 0 : item.getAddedStock();
 
-        // If the item's record date is not today, reset it and carry forward stock
+        LocalDate today = LocalDate.now();
         if (!today.equals(item.getRecordDate())) {
             item.setRecordDate(today);
             item.setStartingStock(item.getAvailableStock());
@@ -346,14 +470,28 @@ public List<Inventory> addMultipleStock(StockRequest request, String realMerchan
             item.setNetlSales(BigDecimal.ZERO);
         }
 
-        // Add the new stock quantity
         int currentAdded = item.getAddedStock() == null ? 0 : item.getAddedStock();
         item.setAddedStock(currentAdded + itemReq.getQuantity());
-
-        // Recalculate available stock
         item.computeAvailableStock();
+        item.setLastUpdated(LocalDateTime.now());
 
-        updatedItems.add(inventoryRepository.save(item));
+        Inventory saved = inventoryRepository.save(item);
+        updatedItems.add(saved);
+
+        // snapshot AFTER + audit row, same transaction
+        auditRepository.save(InventoryStockAudit.builder()
+                .inventoryId(saved.getId())
+                .itemCode(saved.getItemCode())
+                .merchantId(saved.getMerchantId())
+                .actionType("RESTOCK")
+                .availableStockBefore(availBefore)
+                .availableStockAfter(saved.getAvailableStock())
+                .addedStockBefore(addedBefore)
+                .addedStockAfter(saved.getAddedStock())
+                .reference(itemReq.getInventoryId().toString())
+                .performedBy(realMerchantId)
+                .createdAt(LocalDateTime.now())
+                .build());
     }
 
     return updatedItems;
@@ -408,6 +546,11 @@ public List<Inventory> addMultipleStock(StockRequest request, String realMerchan
         }
 
         return item;
+    }
+
+    public Inventory getInventoryByMerchantIdAndItemCode(String merchantId, String itemCode) {
+        return inventoryRepository.findByMerchantIdAndItemCode(merchantId, itemCode)
+                .orElse(null);
     }
 
 
@@ -553,8 +696,88 @@ public Map<String, Object> closeDay(String merchantId) {
         item.computeTotalSales();
         return inventoryRepository.save(item);
     }
+    public List<WholesaleCatalogDto> getWholesaleCatalog(String merchantId) {
+        List<Inventory> items = inventoryRepository.findActiveByMerchantId(merchantId);
 
+        return items.stream()
+                .filter(item -> item.getAvailableStock() != null && item.getAvailableStock() > 0)
+                .map(item -> {
+                    Optional<WholesalePriceConfig> config = wholesalePriceConfigRepository
+                            .findActivePrice(item.getItemCode(), merchantId, LocalDate.now());
+                    return config.map(c -> toWholesaleCatalogDto(item, c));
+                })
+                .filter(Optional::isPresent)
+                .map(Optional::get)
+                .toList();
+    }
 
+    private WholesaleCatalogDto toWholesaleCatalogDto(Inventory item, WholesalePriceConfig config) {
+        WholesaleCatalogDto dto = new WholesaleCatalogDto();
+        dto.setInventoryId(item.getId());
+        dto.setItemName(item.getItemName());
+        dto.setItemCode(item.getItemCode());
+        dto.setWholesalePrice(config.getWholesalePrice());
+        dto.setAvailability(resolveAvailability(item.getAvailableStock())); // ← replaces availableStock
+        dto.setProductImageUrl(item.getProductImageUrl());
+        dto.setProductCategory(item.getProductCategory());
+        dto.setProductBrand(item.getProductBrand());
+        return dto;
+    }
+
+    private String resolveAvailability(Integer stock) {
+        if (stock == null || stock <= 0) return "OUT_OF_STOCK";
+        if (stock <= 10) return "LOW_STOCK";
+        return "IN_STOCK";
+    }
+
+    @Transactional
+    public RecurringExpense createRecurringExpense(String merchantId, RecurringExpenseRequest request) {
+
+        RecurringExpense recurring = RecurringExpense.builder()
+                .merchantId(merchantId)
+                .amount(request.getAmount())
+                .narration(request.getNarration())
+                .frequency(request.getFrequency())
+                .startDate(request.getStartDate())
+                .endDate(request.getEndDate())
+                .nextExecutionDate(request.getStartDate())
+                .isActive(true)
+                .build();
+
+        return recurringExpenseRepository.save(recurring);
+    }
+    @Scheduled(cron = "0 0 1 * * *")   // Runs at 1:00 AM every day
+    @Transactional
+    public void processDueRecurringExpenses() {
+        log.info("Starting processing of due recurring expenses...");
+
+        LocalDate today = LocalDate.now();
+
+        List<RecurringExpense> dueExpenses = recurringExpenseRepository
+                .findDueRecurringExpenses(today);
+
+        int processed = 0;
+
+        for (RecurringExpense re : dueExpenses) {
+            try {
+                // Reuse existing logic - This is the key point you wanted
+                recordExpense(re.getMerchantId(), re.getAmount(), re.getNarration());
+
+                // Update next execution date
+                re.updateNextExecutionDate();
+                recurringExpenseRepository.save(re);
+
+                processed++;
+                log.info("Processed recurring expense ID: {} for merchant: {}",
+                        re.getId(), re.getMerchantId());
+
+            } catch (Exception e) {
+                log.error("Failed to process recurring expense ID: {}", re.getId(), e);
+            }
+        }
+
+        log.info("Completed recurring expenses processing. {} expenses executed.", processed);
+    }
 
 @Transactional
 public void recordExpense(String merchantId, BigDecimal amount, String narration) {
@@ -704,25 +927,54 @@ public void recordExpense(String merchantId, BigDecimal amount, String narration
     /**
      * Calculate Wholesale Price Logic - Customize this as needed
      */
+
+
     private BigDecimal calculateWholesalePrice(Inventory item) {
+        // 1. Try merchant-specific price
+        Optional<WholesalePriceConfig> config = wholesalePriceConfigRepository
+                .findActivePrice(item.getItemCode(), item.getMerchantId(), LocalDate.now());
+
+        if (config.isPresent()) {
+            return config.get().getWholesalePrice();
+        }
+
+        // 2. Try global fallback price (merchantId = "GLOBAL")
+        Optional<WholesalePriceConfig> globalConfig = wholesalePriceConfigRepository
+                .findActivePrice(item.getItemCode(), "GLOBAL", LocalDate.now());
+
+        if (globalConfig.isPresent()) {
+            return globalConfig.get().getWholesalePrice();
+        }
+
+        // 3. Last resort: fall back to computed price if no config exists yet
         BigDecimal cost = item.getUnitCost();
-        BigDecimal unitPrice = item.getUnitPrice();
-
-        boolean hasCost = cost != null && cost.compareTo(BigDecimal.ZERO) > 0;
-        boolean hasUnitPrice = unitPrice != null && unitPrice.compareTo(BigDecimal.ZERO) > 0;
-
-        if (hasCost) {
-            // Cost-based: Cost + 20% margin
+        if (cost != null && cost.compareTo(BigDecimal.ZERO) > 0) {
             return cost.multiply(BigDecimal.valueOf(1.20));
         }
 
-        if (hasUnitPrice) {
-            // Fallback: 85% of retail price
-            return unitPrice.multiply(BigDecimal.valueOf(0.85));
-        }
-
-        return BigDecimal.ZERO; // no basis for calculation
+        return item.getUnitPrice() != null
+                ? item.getUnitPrice().multiply(BigDecimal.valueOf(0.85))
+                : BigDecimal.ZERO;
     }
+//    private BigDecimal calculateWholesalePrice(Inventory item) {
+//        BigDecimal cost = item.getUnitCost();
+//        BigDecimal unitPrice = item.getUnitPrice();
+//
+//        boolean hasCost = cost != null && cost.compareTo(BigDecimal.ZERO) > 0;
+//        boolean hasUnitPrice = unitPrice != null && unitPrice.compareTo(BigDecimal.ZERO) > 0;
+//
+//        if (hasCost) {
+//            // Cost-based: Cost + 20% margin
+//            return cost.multiply(BigDecimal.valueOf(1.20));
+//        }
+//
+//        if (hasUnitPrice) {
+//            // Fallback: 85% of retail price
+//            return unitPrice.multiply(BigDecimal.valueOf(0.85));
+//        }
+//
+//        return BigDecimal.ZERO; // no basis for calculation
+//    }
 
     @Transactional
     public Inventory updateInventoryItem(Long id, String merchantId, String itemName, Integer quantity, BigDecimal unitPrice) {
@@ -796,6 +1048,50 @@ public void recordExpense(String merchantId, BigDecimal amount, String narration
         if (cell == null) return "";
         cell.setCellType(CellType.STRING);
         return cell.getStringCellValue().trim();
+    }
+    public TransactionReconciliationDto getReconciliation(String merchantId, LocalDate date) {
+        List<SaleLineProjection> lines = inventoryRepository.getReconciliationLines(merchantId, date);
+
+        Map<String, List<SaleLineProjection>> grouped = lines.stream()
+                .collect(Collectors.groupingBy(SaleLineProjection::getTransactionRef, LinkedHashMap::new, Collectors.toList()));
+
+        List<BasketDto> baskets = grouped.entrySet().stream()
+                .map(entry -> {
+                    List<SaleLineProjection> basketLines = entry.getValue();
+                    BasketDto basket = new BasketDto();
+                    basket.setTransactionRef(entry.getKey());
+                    basket.setSaleDatetime(basketLines.get(0).getSaleDatetime());
+                    basket.setCustomerPhone(basketLines.get(0).getCustomerPhone());
+                    basket.setItemCount(basketLines.size());
+                    basket.setTotalUnits(basketLines.stream().mapToInt(SaleLineProjection::getQuantity).sum());
+                    basket.setBasketTotal(basketLines.stream()
+                            .map(SaleLineProjection::getTotalPrice)
+                            .reduce(BigDecimal.ZERO, BigDecimal::add));
+                    basket.setItems(basketLines.stream().map(this::toBasketLine).toList());
+                    return basket;
+                })
+                .sorted(Comparator.comparing(BasketDto::getSaleDatetime))
+                .toList();
+
+        TransactionReconciliationDto report = new TransactionReconciliationDto();
+        report.setDate(date);
+        report.setMerchantId(merchantId);
+        report.setTotalTransactions(baskets.size());
+        report.setTotalUnits(baskets.stream().mapToInt(BasketDto::getTotalUnits).sum());
+        report.setTotalRevenue(baskets.stream().map(BasketDto::getBasketTotal).reduce(BigDecimal.ZERO, BigDecimal::add));
+        report.setTransactions(baskets);
+        return report;
+    }
+
+    private BasketLineDto toBasketLine(SaleLineProjection p) {
+        BasketLineDto dto = new BasketLineDto();
+        dto.setItemCode(p.getItemCode());
+        dto.setItemName(p.getItemName());
+        dto.setQuantity(p.getQuantity());
+        dto.setUnitPrice(p.getUnitPrice());
+        dto.setTotalPrice(p.getTotalPrice());
+        dto.setOrderType(p.getOrderType());
+        return dto;
     }
 
 

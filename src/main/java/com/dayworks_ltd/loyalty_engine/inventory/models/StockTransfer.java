@@ -56,6 +56,7 @@ public class StockTransfer {
     @Column(columnDefinition = "TEXT")
     private String notes;
 
+    @Builder.Default
     @OneToMany(mappedBy = "stockTransfer", cascade = CascadeType.ALL, orphanRemoval = true)
     private List<StockTransferItem> items = new ArrayList<>();
 

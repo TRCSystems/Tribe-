@@ -43,8 +43,21 @@ public class SupplierInvoice {
     @Column(nullable = false)
     private LocalDate invoiceDate;  // 2025-12-18
 
-    @Column( nullable = false)
-    private boolean kraApproved = false;
+    @Column
+    private Boolean kraApproved;
+
+    @Column(name = "kra_verification_status", nullable = false, length = 20)
+    private String kraVerificationStatus = "PENDING";
+// Values: PENDING, VERIFIED, INVALID, KRA_DOWN, UNVERIFIABLE, NO_CUIN
+
+    @Column(nullable = false)
+    private int kraVerificationAttempts = 0;
+
+    @Column
+    private LocalDateTime kraNextRetryAt;
+
+    @Column
+    private LocalDateTime kraVerifiedAt;
 
     @Column(nullable = false, precision = 12, scale = 2)
     private BigDecimal subtotal;  // 15060.34

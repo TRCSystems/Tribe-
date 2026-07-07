@@ -5,7 +5,6 @@ import com.dayworks_ltd.loyalty_engine.auth.model.User;
 import com.dayworks_ltd.loyalty_engine.auth.repository.UserRepository;
 import com.dayworks_ltd.loyalty_engine.dto.CreateMerchantRequest;
 import jakarta.transaction.Transactional;
-import jakarta.validation.Valid;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.stereotype.Service;
@@ -45,6 +44,44 @@ public class MerchantService {
             merchant.setMerchantOtp(newGeneratedOtp);
             merchantRepository.save(merchant);
         }
+    }
+
+    @Transactional
+    public Merchant createMerchantFromOrder(CreateMerchantRequest request, Long userId) {
+
+        String normalizedPhone = normalizePhone(request.getBusinessPhone());
+
+        if (!merchantRepository.findByBusinessPhone(normalizedPhone).isEmpty()) {
+            throw new IllegalArgumentException(
+                    "A merchant with this phone number already exists. Use search instead of create.");
+        }
+
+        // === RESOLVE REAL MERCHANT ID (Same pattern as your daily-summary) ===
+        Optional<User> userOpt = userRepository.findById(userId);
+
+        if (userOpt.isEmpty()) {
+            throw new IllegalArgumentException("User not found");
+        }
+
+        User user = userOpt.get();
+        String merchantIdStr = user.getMerchantId();
+
+        if (merchantIdStr == null || merchantIdStr.isBlank()) {
+            throw new IllegalArgumentException("This user is not linked to any merchant");
+        }
+
+        Merchant distributor = merchantRepository.findById(Long.parseLong(merchantIdStr))
+                .orElseThrow(() -> new IllegalArgumentException("Distributor not found"));
+
+        Merchant merchant = Merchant.builder()
+                .businessName(request.getBusinessName())
+                .location(request.getLocation())
+                .businessType(request.getBusinessType())
+                .businessPhone(normalizedPhone)
+                .distributor(distributor)
+                .build();
+
+        return merchantRepository.save(merchant);
     }
     @Transactional
     public Merchant createMerchant(CreateMerchantRequest request) {
@@ -107,4 +144,23 @@ public class MerchantService {
         merchantRepository.deleteById(id);
     }
 
+    public List<Merchant> getLiquorWholesalers() {
+        return merchantRepository.findLiquorWholesalers("LIQUOR");
+    }
+    private String normalizePhone(String raw) {
+        String digits = raw.replaceAll("[^0-9]", "");
+        if (digits.startsWith("254")) return "0" + digits.substring(3);
+        if (digits.startsWith("0")) return digits;
+        if (digits.length() == 9) return "0" + digits; // missing leading 0
+        return digits;
+    }
+
+    public List<Merchant> search(String query) {
+        String normalizedPhone = normalizePhone(query); // handles 07xx / 254 / +254
+        List<Merchant> byPhone = merchantRepository.findByBusinessPhone(normalizedPhone);
+        if (!byPhone.isEmpty()) return byPhone;
+
+        // fallback: fuzzy name match
+        return merchantRepository.findByBusinessNameContainingIgnoreCase(query.trim());
+    }
 }

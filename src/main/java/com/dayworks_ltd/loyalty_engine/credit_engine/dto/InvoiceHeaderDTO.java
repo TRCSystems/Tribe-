@@ -9,6 +9,8 @@ import java.time.LocalDate;
 public class InvoiceHeaderDTO {
     @JsonProperty("invoiceNumber")
     private String invoiceNumber;
+    @JsonProperty("cuin")
+    private String cuin;  // KRA Control Unit Invoice Number
 
     @JsonProperty("date")
     private LocalDate date;
