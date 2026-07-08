@@ -11,6 +11,7 @@ import com.dayworks_ltd.loyalty_engine.inventory.models.StockTransfer;
 import com.dayworks_ltd.loyalty_engine.merchants.Merchant;
 import com.dayworks_ltd.loyalty_engine.merchants.MerchantRepository;
 import com.dayworks_ltd.loyalty_engine.merchants.MerchantService;
+import com.dayworks_ltd.loyalty_engine.orders.CannotFulfillOrderException;
 import com.dayworks_ltd.loyalty_engine.orders.dto.*;
 import com.dayworks_ltd.loyalty_engine.orders.models.Order;
 import com.dayworks_ltd.loyalty_engine.orders.models.OrderItem;
@@ -19,6 +20,7 @@ import io.swagger.v3.oas.annotations.Operation;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.data.repository.query.Param;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
@@ -255,7 +257,9 @@ public class OrderController {
     @Operation(summary = "Distributor fulfills a paid order")
     public ResponseEntity<?> fulfillOrder(
             @AuthenticationPrincipal CustomUserDetails userDetails,
-            @PathVariable String orderCode) {
+            @PathVariable String orderCode,
+            @RequestParam(name = "allowPartial", defaultValue = "false") boolean allowPartial
+    ) {
 
         if (userDetails == null) {
             return ResponseEntity.status(401).body(Map.of("status", "ERROR", "message", "Unauthorized"));
@@ -266,7 +270,7 @@ public class OrderController {
             User user = userRepository.getUserById(userId);
             String distributorId = user.getMerchantId();
 
-            StockTransfer transfer = orderService.fulfillOrder(orderCode, distributorId, userId);
+            StockTransfer transfer = orderService.fulfillOrder(orderCode, distributorId, userId, allowPartial);
 
             return ResponseEntity.ok(Map.of(
                     "status", "SUCCESS",
@@ -274,7 +278,18 @@ public class OrderController {
                     "orderCode", orderCode,
                     "transferCode", transfer.getTransferCode()
             ));
-        } catch (Exception e) {
+        }
+        catch(CannotFulfillOrderException e)
+        {
+            return ResponseEntity.ok(Map.of(
+                    "status", "FAILURE",
+                    "message", "Order cannot be fully fulfilled",
+                    "orderCode", orderCode,
+                    "transferCode", "",
+                    "insufficientItems", e.getInsufficientOrderItems()
+            ));
+        }
+        catch (Exception e) {
             return ResponseEntity.badRequest().body(Map.of(
                     "status", "FAILURE",
                     "message", e.getMessage()
