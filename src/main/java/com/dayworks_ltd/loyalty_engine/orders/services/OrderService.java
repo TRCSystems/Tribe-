@@ -3,7 +3,12 @@ import com.dayworks_ltd.loyalty_engine.auth.enums.TransferType;
 import com.dayworks_ltd.loyalty_engine.common.OrderStatus;
 import com.dayworks_ltd.loyalty_engine.inventory.DTO.StockTransferItemRequest;
 import com.dayworks_ltd.loyalty_engine.inventory.DTO.StockTransferRequest;
+import com.dayworks_ltd.loyalty_engine.inventory.models.DailySalesSummary;
 import com.dayworks_ltd.loyalty_engine.inventory.models.Inventory;
+import com.dayworks_ltd.loyalty_engine.inventory.models.SaleTransaction;
+import com.dayworks_ltd.loyalty_engine.inventory.repositories.DailySalesSummaryRepository;
+import com.dayworks_ltd.loyalty_engine.inventory.repositories.SaleTransactionRepository;
+import com.dayworks_ltd.loyalty_engine.inventory.services.InventoryService;
 import com.dayworks_ltd.loyalty_engine.inventory.services.ProductPerformanceService;
 import com.dayworks_ltd.loyalty_engine.inventory.services.StockTransferService;
 import com.dayworks_ltd.loyalty_engine.inventory.models.StockTransfer;
@@ -19,6 +24,7 @@ import com.dayworks_ltd.loyalty_engine.merchants.MerchantRepository;
 import com.dayworks_ltd.loyalty_engine.inventory.repositories.InventoryRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
@@ -40,8 +46,14 @@ public class OrderService {
     private final InventoryRepository inventoryRepository;
     private final RestTemplate restTemplate;
     private final StockTransferService stockTransferService;
-    private final ProductPerformanceService productPerformanceService; // add this
+    private final ProductPerformanceService productPerformanceService;
 
+    @Autowired
+    private SaleTransactionRepository saleTransactionRepository;
+    @Autowired
+    private InventoryService inventoryService;
+    @Autowired
+    private DailySalesSummaryRepository dailySalesSummaryRepository;
 
     @Value("${payment.base-url}")
     private String paymentBaseUrl;
@@ -272,14 +284,83 @@ public class OrderService {
 
         return "0".equals(resultCode.toString());
     }
+//
+//    @Transactional
+//    public StockTransfer fulfillOrder(String orderCode, String distributorMerchantId, Long issuedByUserId, boolean allowPartial) {
+//
+//        Order order = orderRepository.findByOrderCode(orderCode)
+//                .orElseThrow(() -> new IllegalArgumentException("Order not found"));
+//
+//        List<OrderItem> originalOrderItems = new ArrayList<>(order.getItems());
+//
+//        switch (order.getStatus()) {
+//            case PENDING -> throw new IllegalArgumentException("Order has not been paid yet");
+//            case FULFILLED -> throw new IllegalArgumentException(
+//                    "Order already fulfilled. Transfer: " + order.getStockTransfer().getTransferCode()
+//            );
+//            case RECEIVED -> throw new IllegalArgumentException("Order already received by merchant");
+//            case CANCELLED -> throw new IllegalArgumentException("Order has been cancelled");
+//            case PAID -> {} // valid — proceed
+//        }
+//
+//
+//        if (!order.getDistributor().getId().toString().equals(distributorMerchantId)) {
+//            throw new IllegalArgumentException("You are not the distributor for this order");
+//        }
+//
+//
+//        log.info("\n\n\n");
+//        log.info("Fulfill partial: {}", allowPartial);
+//        log.info("\n\n\n");
+//        //Validate order items. Separate order items that are not in inventory and those that are low in stock
+//        //from order items that are available and have enough stock
+//
+//        ArrayList<InsufficientOrderItem> insufficientOrderItems = new ArrayList<>();
+//        List<OrderItem> orderItems = new ArrayList<>();
+//
+//        validateDistributorStock(order, distributorMerchantId, allowPartial, orderItems, insufficientOrderItems);
+//        //at this point, insufficient order items contains items that are not available in inventory
+//        //or those that are low in stock
+//        //orderItems remains with those that are available in inventory and have enough stock
+//        //to fulfill order request
+//
+//        for(InsufficientOrderItem insufficientOrderItem : insufficientOrderItems)
+//        {
+//            orderItems.add(
+//                    OrderItem.builder()
+//                            .itemCode(insufficientOrderItem.itemCode())
+//                            .itemName(insufficientOrderItem.itemCode())
+//                            .quantity(insufficientOrderItem.availableStock())
+//                            .wholesalePrice(insufficientOrderItem.wholesalePrice())
+//                            .build()
+//            );
+//        }
+//
+//
+//        // Create Stock Transfer from Order
+//        StockTransferRequest transferRequest = createTransferRequestFromOrder(
+//                order.getOrderCode(),
+//                order.getDistributor().getId(),
+//                order.getMerchant().getId(),
+//                orderItems
+//        );
+//
+//        StockTransfer stockTransfer = stockTransferService.createStockTransfer(transferRequest, issuedByUserId);
+//
+//        // Link them
+//        order.markAsFulfilled(stockTransfer);
+//        orderRepository.save(order);
+//
+//        log.info("Order {} fulfilled with Stock Transfer {}", orderCode, stockTransfer.getTransferCode());
+//
+//        return stockTransfer;
+//    }
 
     @Transactional
     public StockTransfer fulfillOrder(String orderCode, String distributorMerchantId, Long issuedByUserId, boolean allowPartial) {
 
         Order order = orderRepository.findByOrderCode(orderCode)
                 .orElseThrow(() -> new IllegalArgumentException("Order not found"));
-
-        List<OrderItem> originalOrderItems = new ArrayList<>(order.getItems());
 
         switch (order.getStatus()) {
             case PENDING -> throw new IllegalArgumentException("Order has not been paid yet");
@@ -288,32 +369,19 @@ public class OrderService {
             );
             case RECEIVED -> throw new IllegalArgumentException("Order already received by merchant");
             case CANCELLED -> throw new IllegalArgumentException("Order has been cancelled");
-            case PAID -> {} // valid — proceed
+            case PAID -> {}
         }
-
 
         if (!order.getDistributor().getId().toString().equals(distributorMerchantId)) {
             throw new IllegalArgumentException("You are not the distributor for this order");
         }
 
-
-        log.info("\n\n\n");
-        log.info("Fulfill partial: {}", allowPartial);
-        log.info("\n\n\n");
-        //Validate order items. Separate order items that are not in inventory and those that are low in stock
-        //from order items that are available and have enough stock
-
         ArrayList<InsufficientOrderItem> insufficientOrderItems = new ArrayList<>();
         List<OrderItem> orderItems = new ArrayList<>();
 
         validateDistributorStock(order, distributorMerchantId, allowPartial, orderItems, insufficientOrderItems);
-        //at this point, insufficient order items contains items that are not available in inventory
-        //or those that are low in stock
-        //orderItems remains with those that are available in inventory and have enough stock
-        //to fulfill order request
 
-        for(InsufficientOrderItem insufficientOrderItem : insufficientOrderItems)
-        {
+        for (InsufficientOrderItem insufficientOrderItem : insufficientOrderItems) {
             orderItems.add(
                     OrderItem.builder()
                             .itemCode(insufficientOrderItem.itemCode())
@@ -324,8 +392,6 @@ public class OrderService {
             );
         }
 
-
-        // Create Stock Transfer from Order
         StockTransferRequest transferRequest = createTransferRequestFromOrder(
                 order.getOrderCode(),
                 order.getDistributor().getId(),
@@ -335,16 +401,74 @@ public class OrderService {
 
         StockTransfer stockTransfer = stockTransferService.createStockTransfer(transferRequest, issuedByUserId);
 
-        // Link them
         order.markAsFulfilled(stockTransfer);
         orderRepository.save(order);
+
+        recordFulfillmentSale(distributorMerchantId, orderItems, stockTransfer.getTransferCode(), LocalDateTime.now());
 
         log.info("Order {} fulfilled with Stock Transfer {}", orderCode, stockTransfer.getTransferCode());
 
         return stockTransfer;
     }
 
+    private void recordFulfillmentSale(
+            String distributorMerchantId,
+            List<OrderItem> orderItems,
+            String transactionRef,
+            LocalDateTime now
+    ) {
+        List<SaleTransaction> transactions = new ArrayList<>();
 
+        for (OrderItem item : orderItems) {
+            Inventory inventory = inventoryService.getInventoryByMerchantIdAndItemCode(
+                    distributorMerchantId, item.getItemCode());
+
+            BigDecimal unitCost = (inventory != null && inventory.getUnitCost() != null)
+                    ? inventory.getUnitCost() : BigDecimal.ZERO;
+
+            if (unitCost.compareTo(BigDecimal.ZERO) <= 0) {
+                log.warn("Fulfillment sale: zero/null unit_cost for item {} distributor {} — recording anyway",
+                        item.getItemCode(), distributorMerchantId);
+            }
+
+            BigDecimal unitPrice = item.getWholesalePrice();
+            BigDecimal lineTotal = unitPrice.multiply(BigDecimal.valueOf(item.getQuantity()));
+
+            transactions.add(SaleTransaction.builder()
+                    .merchantId(distributorMerchantId)
+                    .saleDate(now.toLocalDate())
+                    .saleDateTime(now)
+                    .itemName(item.getItemName())
+                    .itemCode(item.getItemCode())
+                    .quantity(item.getQuantity())
+                    .unitPrice(unitPrice)
+                    .unitCost(unitCost)
+                    .totalPrice(lineTotal)
+                    .transactionRef(transactionRef)
+                    .orderType("WHOLESALE")
+                    .build());
+        }
+
+        saleTransactionRepository.saveAll(transactions);
+
+        DailySalesSummary summary = dailySalesSummaryRepository
+                .findByMerchantIdAndRecordDate(distributorMerchantId, now.toLocalDate())
+                .orElse(DailySalesSummary.builder()
+                        .merchantId(distributorMerchantId)
+                        .recordDate(now.toLocalDate())
+                        .grossSales(BigDecimal.ZERO)
+                        .deductions(BigDecimal.ZERO)
+                        .netSales(BigDecimal.ZERO)
+                        .build());
+
+        BigDecimal fulfillmentTotal = transactions.stream()
+                .map(SaleTransaction::getTotalPrice)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+
+        summary.setGrossSales(summary.getGrossSales().add(fulfillmentTotal));
+        summary.setNetSales(summary.getNetSales().add(fulfillmentTotal));
+        dailySalesSummaryRepository.save(summary);
+    }
     private List<InsufficientOrderItem> validateDistributorStock(
             Order order, String distributorMerchantId, boolean allowPartial,
             List<OrderItem> orderItems,

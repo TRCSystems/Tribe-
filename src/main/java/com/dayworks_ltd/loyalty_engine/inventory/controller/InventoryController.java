@@ -1126,7 +1126,7 @@ public ResponseEntity<?> getMerchantReport(@PathVariable Long merchantId) {  // 
     }
 
     @PostMapping("/sale")
-    @Operation(summary = "Record sale", description = "record sale made to customer (supports per-item discount/extra)")
+    @Operation(summary = "Record sale", description = "record retail sale made to customer (supports per-item discount/extra)")
     public ResponseEntity<?> recordSale(@RequestBody SaleRequest request) {
         try {
             // ── Resolve real merchantId ────────────────────────────────────────
@@ -1158,29 +1158,12 @@ public ResponseEntity<?> getMerchantReport(@PathVariable Long merchantId) {  // 
             log.info("SALE - Incoming userId: {} → Resolved to real merchantId: {} | Request: {}",
                     userIdStr, merchantId, request);
 
-            // ── Early Validation: Wholesale Price Check ───────────────────────
+            // ── POS is retail-only. Wholesale must go through merchant orders. ──
             if ("WHOLESALE".equalsIgnoreCase(request.getOrderType())) {
-                for (SaleItemRequest itemReq : request.getItems()) {
-                    Inventory inventory = inventoryService.getInventoryItemById(itemReq.getInventoryId());
-                    if (inventory == null) {
-                        return ResponseEntity.badRequest().body(Map.of(
-                                "status", "FAILURE",
-                                "message", "Item not found with ID: " + itemReq.getInventoryId()
-                        ));
-                    }
-
-                    boolean hasWholesalePrice = wholesalePriceConfigRepository
-                            .findActivePrice(inventory.getItemCode(), merchantId, LocalDate.now())
-                            .isPresent();
-
-                    if (!hasWholesalePrice) {
-                        return ResponseEntity.badRequest().body(Map.of(
-                                "status", "FAILURE",
-                                "message", "No wholesale price configured for item: " + inventory.getItemName() +
-                                        " [" + inventory.getItemCode() + "]. Contact admin to set wholesale pricing."
-                        ));
-                    }
-                }
+                return ResponseEntity.badRequest().body(Map.of(
+                        "status", "FAILURE",
+                        "message", "Wholesale sales must go through merchant orders, not POS."
+                ));
             }
 
             // ── Core sale logic ─────────────────────────────────────────────────
@@ -1201,22 +1184,12 @@ public ResponseEntity<?> getMerchantReport(@PathVariable Long merchantId) {  // 
                     throw new IllegalArgumentException("Item not found with ID: " + itemReq.getInventoryId());
                 }
 
-                // Resolve price based on orderType
-                BigDecimal unitPrice;
-                if ("WHOLESALE".equalsIgnoreCase(request.getOrderType())) {
-                    unitPrice = wholesalePriceConfigRepository
-                            .findActivePrice(inventory.getItemCode(), merchantId, LocalDate.now())
-                            .map(WholesalePriceConfig::getWholesalePrice)
-                            .orElseThrow(); // This should never happen due to pre-validation
-                } else {
-                    unitPrice = inventory.getUnitPrice() != null ? inventory.getUnitPrice() : BigDecimal.ZERO;
-                }
+                BigDecimal unitPrice = inventory.getUnitPrice() != null ? inventory.getUnitPrice() : BigDecimal.ZERO;
 
                 BigDecimal discount = itemReq.getDiscount() != null ? itemReq.getDiscount() : BigDecimal.ZERO;
                 BigDecimal baseAmount = unitPrice.multiply(BigDecimal.valueOf(itemReq.getQuantity()));
                 BigDecimal lineTotal = baseAmount.add(discount);
 
-                // Note: Usually discount is subtracted
                 if (inventory.getUnitCost() == null || inventory.getUnitCost().compareTo(BigDecimal.ZERO) <= 0) {
                     log.info("Sale blocked: zero/null unit_cost for item {} merchant {}", inventory.getItemCode(), merchantId);
                     return ResponseEntity.badRequest().body(Map.of(
@@ -1224,7 +1197,7 @@ public ResponseEntity<?> getMerchantReport(@PathVariable Long merchantId) {  // 
                             "message", "Item " + inventory.getItemName() + " has no valid cost configured. Contact admin."
                     ));
                 }
-                BigDecimal unitCost = inventory.getUnitCost() != null ? inventory.getUnitCost() : BigDecimal.ZERO;
+                BigDecimal unitCost = inventory.getUnitCost();
 
                 totalAmount = totalAmount.add(lineTotal);
 
@@ -1241,7 +1214,7 @@ public ResponseEntity<?> getMerchantReport(@PathVariable Long merchantId) {  // 
                         .totalPrice(lineTotal)
                         .customerPhone(request.getCustomerPhone())
                         .transactionRef(transactionRef)
-                        .orderType(request.getOrderType() != null ? request.getOrderType() : "RETAIL")
+                        .orderType("RETAIL")
                         .build();
 
                 saleTransactions.add(transaction);
@@ -1302,7 +1275,6 @@ public ResponseEntity<?> getMerchantReport(@PathVariable Long merchantId) {  // 
                 logger.info("Payment notification failed: {}", e.getMessage());
             }
 
-            // Success response
             return ResponseEntity.ok(Map.of(
                     "status", "SUCCESS",
                     "message", "Sale recorded successfully",
@@ -1327,7 +1299,6 @@ public ResponseEntity<?> getMerchantReport(@PathVariable Long merchantId) {  // 
         }
     }
 
-//
 //    @PostMapping("/sale")
 //    @Operation(summary = "Record sale", description = "record sale made to customer (supports per-item discount/extra)")
 //    public ResponseEntity<?> recordSale(@RequestBody SaleRequest request) {
@@ -1360,6 +1331,32 @@ public ResponseEntity<?> getMerchantReport(@PathVariable Long merchantId) {  // 
 //
 //            log.info("SALE - Incoming userId: {} → Resolved to real merchantId: {} | Request: {}",
 //                    userIdStr, merchantId, request);
+//
+//            // ── Early Validation: Wholesale Price Check ───────────────────────
+//            if ("WHOLESALE".equalsIgnoreCase(request.getOrderType())) {
+//                for (SaleItemRequest itemReq : request.getItems()) {
+//                    Inventory inventory = inventoryService.getInventoryItemById(itemReq.getInventoryId());
+//                    if (inventory == null) {
+//                        return ResponseEntity.badRequest().body(Map.of(
+//                                "status", "FAILURE",
+//                                "message", "Item not found with ID: " + itemReq.getInventoryId()
+//                        ));
+//                    }
+//
+//                    boolean hasWholesalePrice = wholesalePriceConfigRepository
+//                            .findActivePrice(inventory.getItemCode(), merchantId, LocalDate.now())
+//                            .isPresent();
+//
+//                    if (!hasWholesalePrice) {
+//                        return ResponseEntity.badRequest().body(Map.of(
+//                                "status", "FAILURE",
+//                                "message", "No wholesale price configured for item: " + inventory.getItemName() +
+//                                        " [" + inventory.getItemCode() + "]. Contact admin to set wholesale pricing."
+//                        ));
+//                    }
+//                }
+//            }
+//
 //            // ── Core sale logic ─────────────────────────────────────────────────
 //            String transactionRef = UUID.randomUUID().toString();
 //            LocalDateTime now = LocalDateTime.now();
@@ -1368,34 +1365,39 @@ public ResponseEntity<?> getMerchantReport(@PathVariable Long merchantId) {  // 
 //            List<SaleTransaction> saleTransactions = new ArrayList<>();
 //            BigDecimal totalAmount = BigDecimal.ZERO;
 //
-//            // Step 1: Update inventory quantities (unchanged)
+//            // Step 1: Update inventory quantities
 //            List<Inventory> updatedInventories = inventoryService.recordMultipleSales(request);
 //
-//            // Step 2: Build transactions with discount handling
+//            // Step 2: Build transactions
 //            for (SaleItemRequest itemReq : request.getItems()) {
 //                Inventory inventory = inventoryService.getInventoryItemById(itemReq.getInventoryId());
 //                if (inventory == null) {
 //                    throw new IllegalArgumentException("Item not found with ID: " + itemReq.getInventoryId());
 //                }
 //
-//                // ── Resolve price based on orderType ──────────────────────────────
+//                // Resolve price based on orderType
 //                BigDecimal unitPrice;
 //                if ("WHOLESALE".equalsIgnoreCase(request.getOrderType())) {
 //                    unitPrice = wholesalePriceConfigRepository
-//                            .findActivePrice(inventory.getItemCode(), inventory.getMerchantId(), LocalDate.now())
+//                            .findActivePrice(inventory.getItemCode(), merchantId, LocalDate.now())
 //                            .map(WholesalePriceConfig::getWholesalePrice)
-//                            .orElseThrow(() -> new IllegalArgumentException(
-//                                    "No wholesale price configured for item: " + inventory.getItemName() +
-//                                            " [" + inventory.getItemCode() + "]. Contact admin to set wholesale pricing."
-//                            ));
+//                            .orElseThrow(); // This should never happen due to pre-validation
 //                } else {
 //                    unitPrice = inventory.getUnitPrice() != null ? inventory.getUnitPrice() : BigDecimal.ZERO;
 //                }
-//                // ──────────────────────────────────────────────────────────────────
 //
 //                BigDecimal discount = itemReq.getDiscount() != null ? itemReq.getDiscount() : BigDecimal.ZERO;
 //                BigDecimal baseAmount = unitPrice.multiply(BigDecimal.valueOf(itemReq.getQuantity()));
 //                BigDecimal lineTotal = baseAmount.add(discount);
+//
+//                // Note: Usually discount is subtracted
+//                if (inventory.getUnitCost() == null || inventory.getUnitCost().compareTo(BigDecimal.ZERO) <= 0) {
+//                    log.info("Sale blocked: zero/null unit_cost for item {} merchant {}", inventory.getItemCode(), merchantId);
+//                    return ResponseEntity.badRequest().body(Map.of(
+//                            "status", "FAILURE",
+//                            "message", "Item " + inventory.getItemName() + " has no valid cost configured. Contact admin."
+//                    ));
+//                }
 //                BigDecimal unitCost = inventory.getUnitCost() != null ? inventory.getUnitCost() : BigDecimal.ZERO;
 //
 //                totalAmount = totalAmount.add(lineTotal);
@@ -1408,25 +1410,21 @@ public ResponseEntity<?> getMerchantReport(@PathVariable Long merchantId) {  // 
 //                        .itemCode(inventory.getItemCode())
 //                        .quantity(itemReq.getQuantity())
 //                        .unitPrice(unitPrice)
-//                        .unitCost(unitCost) // ← now correct price
+//                        .unitCost(unitCost)
 //                        .discount(discount)
 //                        .totalPrice(lineTotal)
 //                        .customerPhone(request.getCustomerPhone())
 //                        .transactionRef(transactionRef)
-//                        .orderType(request.getOrderType() != null ? request.getOrderType() : "RETAIL")  // ← this
-//
+//                        .orderType(request.getOrderType() != null ? request.getOrderType() : "RETAIL")
 //                        .build();
 //
 //                saleTransactions.add(transaction);
 //            }
 //
-//            // Step 3: Save all sale lines
+//            // Step 3: Save sale transactions
 //            saleTransactionRepository.saveAll(saleTransactions);
 //
-//
-//
 //            // Step 3.5: Update ProductPerformance
-//
 //            for (SaleTransaction transaction : saleTransactions) {
 //                try {
 //                    Inventory inventory = inventoryService.getInventoryByMerchantIdAndItemCode(
@@ -1438,8 +1436,6 @@ public ResponseEntity<?> getMerchantReport(@PathVariable Long merchantId) {  // 
 //                                transaction.getQuantity(),
 //                                transaction.getDiscount()
 //                        );
-//                    } else {
-//                        log.warn("ProductPerformance skipped — item not found: {}", transaction.getItemCode());
 //                    }
 //                } catch (Exception e) {
 //                    log.warn("ProductPerformance update failed for item {}: {}",
@@ -1447,9 +1443,7 @@ public ResponseEntity<?> getMerchantReport(@PathVariable Long merchantId) {  // 
 //                }
 //            }
 //
-//
-//
-//            // Step 4: Update DailySalesSummary with final totalAmount
+//            // Step 4: Update DailySalesSummary
 //            DailySalesSummary summary = dailySalesSummaryRepository
 //                    .findByMerchantIdAndRecordDate(merchantId, saleDate)
 //                    .orElse(DailySalesSummary.builder()
@@ -1461,11 +1455,11 @@ public ResponseEntity<?> getMerchantReport(@PathVariable Long merchantId) {  // 
 //                            .build());
 //
 //            summary.setGrossSales(summary.getGrossSales().add(totalAmount));
-//            summary.setNetSales(summary.getNetSales().add(totalAmount)); // adjust deductions if needed later
+//            summary.setNetSales(summary.getNetSales().add(totalAmount));
 //
 //            dailySalesSummaryRepository.save(summary);
 //
-//            // Step 5: Payment notification (unchanged)
+//            // Step 5: Payment notification
 //            PaymentNotification paymentNotification = new PaymentNotification();
 //            paymentNotification.setTransactionType("Payment");
 //            paymentNotification.setTransID(transactionRef);
@@ -1479,11 +1473,10 @@ public ResponseEntity<?> getMerchantReport(@PathVariable Long merchantId) {  // 
 //            try {
 //                paymentService.recordPayment(paymentNotification);
 //            } catch (Exception e) {
-//
 //                logger.info("Payment notification failed: {}", e.getMessage());
 //            }
 //
-//            // Success response – include discount details
+//            // Success response
 //            return ResponseEntity.ok(Map.of(
 //                    "status", "SUCCESS",
 //                    "message", "Sale recorded successfully",
@@ -1491,7 +1484,7 @@ public ResponseEntity<?> getMerchantReport(@PathVariable Long merchantId) {  // 
 //                    "totalAmount", totalAmount,
 //                    "itemsSold", saleTransactions.size(),
 //                    "data", updatedInventories,
-//                    "saleTransactions", saleTransactions  // optional: return full lines
+//                    "saleTransactions", saleTransactions
 //            ));
 //
 //        } catch (IllegalArgumentException e) {
@@ -1507,7 +1500,6 @@ public ResponseEntity<?> getMerchantReport(@PathVariable Long merchantId) {  // 
 //            ));
 //        }
 //    }
-
 
 
     @GetMapping("/sales/daily-items")

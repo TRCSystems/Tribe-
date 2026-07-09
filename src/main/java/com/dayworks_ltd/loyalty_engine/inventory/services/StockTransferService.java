@@ -8,6 +8,7 @@ import com.dayworks_ltd.loyalty_engine.inventory.DTO.StockTransferItemRequest;
 import com.dayworks_ltd.loyalty_engine.inventory.DTO.StockTransferRequest;
 import com.dayworks_ltd.loyalty_engine.inventory.models.*;
 import com.dayworks_ltd.loyalty_engine.inventory.repositories.InventoryRepository;
+import com.dayworks_ltd.loyalty_engine.inventory.repositories.InventoryStockAuditRepository;
 import com.dayworks_ltd.loyalty_engine.inventory.repositories.InventoryTransactionRepository;
 import com.dayworks_ltd.loyalty_engine.inventory.repositories.StockTransferRepository;
 import com.dayworks_ltd.loyalty_engine.merchants.Merchant;
@@ -32,6 +33,7 @@ public class StockTransferService {
     private final InventoryRepository inventoryRepository;
     private final InventoryTransactionRepository inventoryTransactionRepository;
     private final MerchantRepository merchantRepository;
+    private final InventoryStockAuditRepository auditRepository;
 
     /**
      * Distributor creates a new Stock Transfer (Manual Pickup or Order Fulfillment)
@@ -45,7 +47,6 @@ public class StockTransferService {
         Merchant recipient = merchantRepository.findById(request.getRecipientId())
                 .orElseThrow(() -> new RuntimeException("Recipient merchant not found"));
 
-        // Generate unique transfer code
         String transferCode = "ST-" + LocalDateTime.now().getYear() +
                 String.format("%02d", LocalDateTime.now().getMonthValue()) +
                 "-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase();
@@ -76,7 +77,6 @@ public class StockTransferService {
             stockTransfer.addItem(item);
             totalAmount = totalAmount.add(item.getLineTotal());
 
-            // === Deduct stock from Distributor immediately ===
             deductStockFromDistributor(distributor.getId().toString(), itemReq.getItemCode(),
                     itemReq.getQuantity(), issuedByUserId, transferCode);
         }
@@ -88,6 +88,37 @@ public class StockTransferService {
                 transferCode, distributor.getBusinessName(), recipient.getBusinessName());
 
         return savedTransfer;
+    }
+
+    private void deductStockFromDistributor(String distributorMerchantId, String itemCode, int quantity, Long issuedByUserId, String transferCode) {
+
+        Inventory item = inventoryRepository.findByMerchantIdAndItemCode(distributorMerchantId, itemCode)
+                .orElseThrow(() -> new RuntimeException("Item not found for distributor: " + itemCode));
+
+        int availBefore = item.getAvailableStock();
+        int newAvailable = availBefore - quantity;
+
+        if (newAvailable < 0) {
+            throw new IllegalArgumentException("Not enough stock for " + item.getItemName());
+        }
+
+        item.setAvailableStock(newAvailable);
+        item.setClosingStock(newAvailable);
+        item.setLastUpdated(LocalDateTime.now());
+
+        Inventory saved = inventoryRepository.save(item);
+
+        auditRepository.save(InventoryStockAudit.builder()
+                .inventoryId(saved.getId())
+                .itemCode(saved.getItemCode())
+                .merchantId(distributorMerchantId)
+                .actionType("WHOLESALESALE")
+                .availableStockBefore(availBefore)
+                .availableStockAfter(saved.getAvailableStock())
+                .performedBy(issuedByUserId.toString())
+                .reference(transferCode)
+                .createdAt(LocalDateTime.now())
+                .build());
     }
 
     /**
@@ -157,24 +188,24 @@ public class StockTransferService {
     }
 
     // ====================== Private Helper Methods ======================
-
-    private void deductStockFromDistributor(String distributorMerchantId, String itemCode,
-                                            Integer quantity, Long userId, String referenceCode) {
-
-        Inventory inventory = inventoryRepository.findByMerchantIdAndItemCode(distributorMerchantId, itemCode)
-                .orElseThrow(() -> new RuntimeException("Item not found in distributor inventory: " + itemCode));
-
-        // Deduct from available stock
-        inventory.setAvailableStock(inventory.getAvailableStock() - quantity);
-        inventory.setSoldStock(inventory.getSoldStock() + quantity); // Treating as "sold" to merchant
-        inventory.setClosingStock(inventory.getAvailableStock());
-
-        inventoryRepository.save(inventory);
-
-        // Create Audit Trail
-        createInventoryTransaction(inventory.getMerchantId(), itemCode, inventory.getItemName(),
-                TransactionType.STOCK_TRANSFER_ISSUED, -quantity, userId, "STOCK_TRANSFER", referenceCode);
-    }
+//
+//    private void deductStockFromDistributor(String distributorMerchantId, String itemCode,
+//                                            Integer quantity, Long userId, String referenceCode) {
+//
+//        Inventory inventory = inventoryRepository.findByMerchantIdAndItemCode(distributorMerchantId, itemCode)
+//                .orElseThrow(() -> new RuntimeException("Item not found in distributor inventory: " + itemCode));
+//
+//        // Deduct from available stock
+//        inventory.setAvailableStock(inventory.getAvailableStock() - quantity);
+//        inventory.setSoldStock(inventory.getSoldStock() + quantity); // Treating as "sold" to merchant
+//        inventory.setClosingStock(inventory.getAvailableStock());
+//
+//        inventoryRepository.save(inventory);
+//
+//        // Create Audit Trail
+//        createInventoryTransaction(inventory.getMerchantId(), itemCode, inventory.getItemName(),
+//                TransactionType.STOCK_TRANSFER_ISSUED, -quantity, userId, "STOCK_TRANSFER", referenceCode);
+//    }
 
     private void addStockToMerchant(String merchantId, String itemCode, String itemName,
                                     Integer quantity, BigDecimal wholesalePrice,
