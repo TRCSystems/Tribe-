@@ -12,4 +12,5 @@ public class BasketLineDto {
     private BigDecimal unitPrice;
     private BigDecimal totalPrice;
     private String orderType;
+
 }

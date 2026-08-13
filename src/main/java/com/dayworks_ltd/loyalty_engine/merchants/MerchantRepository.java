@@ -24,4 +24,10 @@ public interface MerchantRepository extends JpaRepository<Merchant, Long>{
     List<Merchant> findByBusinessPhone(String businessPhone);
 
     List<Merchant> findByBusinessNameContainingIgnoreCase(String businessName);
+
+    @Query(value = "SELECT business_name FROM merchants WHERE UPPER(business_type) = 'LIQUOR'",
+            nativeQuery = true)
+    List<String> findBusinessNamesByLiquorType();
+
+
 }

@@ -1,6 +1,7 @@
 package com.dayworks_ltd.loyalty_engine.orders.models;
 
 import com.dayworks_ltd.loyalty_engine.common.OrderStatus;
+import com.dayworks_ltd.loyalty_engine.common.OrderType;
 import com.dayworks_ltd.loyalty_engine.common.PaymentMode;
 import com.dayworks_ltd.loyalty_engine.inventory.models.StockTransfer;
 import com.dayworks_ltd.loyalty_engine.merchants.Merchant;
@@ -15,6 +16,7 @@ import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
+
 @JsonIgnoreProperties({"hibernateLazyInitializer", "handler"})
 @Entity
 @Table(name = "orders")
@@ -34,6 +36,11 @@ public class Order {
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "merchant_id", nullable = false)
     private Merchant merchant;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "order_type", nullable = false, length = 20)
+    @Builder.Default
+    private OrderType orderType = OrderType.SALE;
 
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "distributor_id", nullable = false)
@@ -74,6 +81,14 @@ public class Order {
 
     @Column(name = "received_date")
     private LocalDateTime receivedDate;
+
+    @Column(name = "merchant_contribution", nullable = false, precision = 12, scale = 2)
+    @Builder.Default
+    private BigDecimal merchantContribution = BigDecimal.ZERO;
+
+    @Column(name = "financed_amount", nullable = false, precision = 12, scale = 2)
+    @Builder.Default
+    private BigDecimal financedAmount = BigDecimal.ZERO;
 
     // Add this helper method
     public void markAsFulfilled(StockTransfer stockTransfer) {

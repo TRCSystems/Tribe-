@@ -15,4 +15,6 @@ public class OrderRequest {
     private List<OrderItemRequest> items;
     private PaymentMode paymentMode;
     private String phoneNumber;
+
+    private BigDecimal merchantContribution;
 }

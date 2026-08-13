@@ -13,4 +13,6 @@ public interface SaleLineProjection {
     BigDecimal getUnitPrice();
     BigDecimal getTotalPrice();
     String getOrderType();
+    String getMerchantName();
+    String getMerchantPhone();
 }

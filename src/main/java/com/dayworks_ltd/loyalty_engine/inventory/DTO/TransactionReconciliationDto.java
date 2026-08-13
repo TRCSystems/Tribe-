@@ -10,6 +10,8 @@ import java.util.List;
 public class TransactionReconciliationDto {
     private LocalDate date;
     private String merchantId;
+    private String merchantName;
+    private String merchantPhone;
     private Integer totalTransactions;
     private Integer totalUnits;
     private BigDecimal totalRevenue;

@@ -696,18 +696,31 @@ public Map<String, Object> closeDay(String merchantId) {
         item.computeTotalSales();
         return inventoryRepository.save(item);
     }
+//    public List<WholesaleCatalogDto> getWholesaleCatalog(String merchantId) {
+//        List<Inventory> items = inventoryRepository.findActiveByMerchantId(merchantId);
+//
+//        return items.stream()
+//                .filter(item -> item.getAvailableStock() != null && item.getAvailableStock() > 0)
+//                .map(item -> {
+//                    Optional<WholesalePriceConfig> config = wholesalePriceConfigRepository
+//                            .findLatestPrice(item.getItemCode(), merchantId);
+//                    return config.map(c -> toWholesaleCatalogDto(item, c));
+//                })
+//                .filter(Optional::isPresent)
+//                .map(Optional::get)
+//                .toList();
+//    }
+
     public List<WholesaleCatalogDto> getWholesaleCatalog(String merchantId) {
-        List<Inventory> items = inventoryRepository.findActiveByMerchantId(merchantId);
+        List<Inventory> items = inventoryRepository.findByMerchantId(merchantId);
 
         return items.stream()
-                .filter(item -> item.getAvailableStock() != null && item.getAvailableStock() > 0)
                 .map(item -> {
-                    Optional<WholesalePriceConfig> config = wholesalePriceConfigRepository
-                            .findActivePrice(item.getItemCode(), merchantId, LocalDate.now());
-                    return config.map(c -> toWholesaleCatalogDto(item, c));
+                    WholesalePriceConfig config = wholesalePriceConfigRepository
+                            .findLatestPrice(item.getItemCode(), merchantId)
+                            .orElse(null);
+                    return toWholesaleCatalogDto(item, config); // config may be null
                 })
-                .filter(Optional::isPresent)
-                .map(Optional::get)
                 .toList();
     }
 
@@ -1049,25 +1062,40 @@ public void recordExpense(String merchantId, BigDecimal amount, String narration
         cell.setCellType(CellType.STRING);
         return cell.getStringCellValue().trim();
     }
+
     public TransactionReconciliationDto getReconciliation(String merchantId, LocalDate date) {
         List<SaleLineProjection> lines = inventoryRepository.getReconciliationLines(merchantId, date);
 
         Map<String, List<SaleLineProjection>> grouped = lines.stream()
-                .collect(Collectors.groupingBy(SaleLineProjection::getTransactionRef, LinkedHashMap::new, Collectors.toList()));
+                .collect(Collectors.groupingBy(
+                        SaleLineProjection::getTransactionRef,
+                        LinkedHashMap::new,
+                        Collectors.toList()
+                ));
 
         List<BasketDto> baskets = grouped.entrySet().stream()
                 .map(entry -> {
                     List<SaleLineProjection> basketLines = entry.getValue();
                     BasketDto basket = new BasketDto();
+
                     basket.setTransactionRef(entry.getKey());
                     basket.setSaleDatetime(basketLines.get(0).getSaleDatetime());
-                    basket.setCustomerPhone(basketLines.get(0).getCustomerPhone());
+                    // basket.setCustomerPhone(basketLines.get(0).getCustomerPhone());
+                    basket.setMerchantName(basketLines.get(0).getMerchantName());
+                    basket.setMerchantPhone(basketLines.get(0).getMerchantPhone());
+
                     basket.setItemCount(basketLines.size());
-                    basket.setTotalUnits(basketLines.stream().mapToInt(SaleLineProjection::getQuantity).sum());
+                    basket.setTotalUnits(basketLines.stream()
+                            .mapToInt(SaleLineProjection::getQuantity)
+                            .sum());
                     basket.setBasketTotal(basketLines.stream()
                             .map(SaleLineProjection::getTotalPrice)
                             .reduce(BigDecimal.ZERO, BigDecimal::add));
-                    basket.setItems(basketLines.stream().map(this::toBasketLine).toList());
+
+                    basket.setItems(basketLines.stream()
+                            .map(this::toBasketLine)
+                            .toList());
+
                     return basket;
                 })
                 .sorted(Comparator.comparing(BasketDto::getSaleDatetime))
@@ -1077,11 +1105,52 @@ public void recordExpense(String merchantId, BigDecimal amount, String narration
         report.setDate(date);
         report.setMerchantId(merchantId);
         report.setTotalTransactions(baskets.size());
-        report.setTotalUnits(baskets.stream().mapToInt(BasketDto::getTotalUnits).sum());
-        report.setTotalRevenue(baskets.stream().map(BasketDto::getBasketTotal).reduce(BigDecimal.ZERO, BigDecimal::add));
+        report.setTotalUnits(baskets.stream()
+                .mapToInt(BasketDto::getTotalUnits)
+                .sum());
+        report.setTotalRevenue(baskets.stream()
+                .map(BasketDto::getBasketTotal)
+                .reduce(BigDecimal.ZERO, BigDecimal::add));
         report.setTransactions(baskets);
+
         return report;
     }
+
+//    public TransactionReconciliationDto getReconciliation(String merchantId, LocalDate date) {
+//        List<SaleLineProjection> lines = inventoryRepository.getReconciliationLines(merchantId, date);
+//
+//        Map<String, List<SaleLineProjection>> grouped = lines.stream()
+//                .collect(Collectors.groupingBy(SaleLineProjection::getTransactionRef, LinkedHashMap::new, Collectors.toList()));
+//
+//        List<BasketDto> baskets = grouped.entrySet().stream()
+//                .map(entry -> {
+//                    List<SaleLineProjection> basketLines = entry.getValue();
+//                    BasketDto basket = new BasketDto();
+//                    basket.setTransactionRef(entry.getKey());
+//                    basket.setSaleDatetime(basketLines.get(0).getSaleDatetime());
+////                    basket.setCustomerPhone(basketLines.get(0).getCustomerPhone());
+//                    basket.setMerchantName(basketLines.get(0).getMerchantName());
+//                    basket.setMerchantPhone(basketLines.get(0).getMerchantPhone());
+//                    basket.setItemCount(basketLines.size());
+//                    basket.setTotalUnits(basketLines.stream().mapToInt(SaleLineProjection::getQuantity).sum());
+//                    basket.setBasketTotal(basketLines.stream()
+//                            .map(SaleLineProjection::getTotalPrice)
+//                            .reduce(BigDecimal.ZERO, BigDecimal::add));
+//                    basket.setItems(basketLines.stream().map(this::toBasketLine).toList());
+//                    return basket;
+//                })
+//                .sorted(Comparator.comparing(BasketDto::getSaleDatetime))
+//                .toList();
+//
+//        TransactionReconciliationDto report = new TransactionReconciliationDto();
+//        report.setDate(date);
+//        report.setMerchantId(merchantId);
+//        report.setTotalTransactions(baskets.size());
+//        report.setTotalUnits(baskets.stream().mapToInt(BasketDto::getTotalUnits).sum());
+//        report.setTotalRevenue(baskets.stream().map(BasketDto::getBasketTotal).reduce(BigDecimal.ZERO, BigDecimal::add));
+//        report.setTransactions(baskets);
+//        return report;
+//    }
 
     private BasketLineDto toBasketLine(SaleLineProjection p) {
         BasketLineDto dto = new BasketLineDto();

@@ -76,7 +76,7 @@ public class MerchantService {
         Merchant merchant = Merchant.builder()
                 .businessName(request.getBusinessName())
                 .location(request.getLocation())
-                .businessType(request.getBusinessType())
+                .businessType("LIQUOR")
                 .businessPhone(normalizedPhone)
                 .distributor(distributor)
                 .build();
@@ -120,6 +120,10 @@ public class MerchantService {
 
     public List<Merchant> getAllMerchants() {
         return merchantRepository.findAll();
+    }
+
+    public List<String> getLiquorMerchantNames() {
+        return merchantRepository.findBusinessNamesByLiquorType();
     }
 
     public Optional<Merchant> getMerchantById(Long id) {

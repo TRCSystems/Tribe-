@@ -7,5 +7,10 @@ public enum OrderStatus {
     FULFILLED,        // Distributor has packed and dispatched
     RECEIVED,         // Merchant confirmed receipt
     CANCELLED,
-    PAYMENT_FAILED    // STK push failed at creation — needs retry
+    PAYMENT_FAILED,    // STK push failed at creation — needs retry
+    INVOICED,
+    PARTIAL_PAYMENT,
+    OVERDUE,
+    AT_RISK// NEW — past dueDate, unpaid
+
 }

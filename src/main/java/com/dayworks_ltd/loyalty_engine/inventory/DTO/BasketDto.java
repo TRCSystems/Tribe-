@@ -10,7 +10,8 @@ import java.util.List;
 public class BasketDto {
     private String transactionRef;
     private LocalDateTime saleDatetime;
-    private String customerPhone;
+    private String merchantName;
+    private String merchantPhone;
     private Integer itemCount;
     private Integer totalUnits;
     private BigDecimal basketTotal;

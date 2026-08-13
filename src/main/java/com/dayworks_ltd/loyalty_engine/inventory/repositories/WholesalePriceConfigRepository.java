@@ -24,4 +24,15 @@ public interface WholesalePriceConfigRepository extends JpaRepository<WholesaleP
             @Param("itemCode") String itemCode,
             @Param("merchantId") String merchantId,
             @Param("today") LocalDate today);
+
+    @Query("""
+    SELECT w FROM WholesalePriceConfig w
+    WHERE w.itemCode = :itemCode
+      AND w.merchantId = :merchantId
+    ORDER BY w.effectiveFrom DESC
+    LIMIT 1
+""")
+    Optional<WholesalePriceConfig> findLatestPrice(
+            @Param("itemCode") String itemCode,
+            @Param("merchantId") String merchantId);
 }

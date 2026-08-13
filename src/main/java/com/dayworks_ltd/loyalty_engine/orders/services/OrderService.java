@@ -14,6 +14,7 @@ import com.dayworks_ltd.loyalty_engine.inventory.services.StockTransferService;
 import com.dayworks_ltd.loyalty_engine.inventory.models.StockTransfer;
 import com.dayworks_ltd.loyalty_engine.orders.CannotFulfillOrderException;
 import com.dayworks_ltd.loyalty_engine.orders.dto.InsufficientOrderItem;
+import com.dayworks_ltd.loyalty_engine.orders.dto.OrderFulfillmentResult;
 import com.dayworks_ltd.loyalty_engine.orders.dto.OrderItemRequest;
 import com.dayworks_ltd.loyalty_engine.orders.dto.OrderRequest;
 import com.dayworks_ltd.loyalty_engine.orders.models.Order;
@@ -26,15 +27,21 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.client.RestTemplate;
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import com.dayworks_ltd.loyalty_engine.common.PaymentMode;
+
+import java.time.LocalTime;
 import java.util.*;
+import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
@@ -102,14 +109,25 @@ public class OrderService {
                     .build();
             order.addItem(item);
         }
+        String normalizedPhone = normalizeMsisdn(request.getPhoneNumber());
 
         // PREPAID: STK Push
         if (request.getPaymentMode() == PaymentMode.PREPAID) {
+            log.info("Initiating STK push for order {} | phone={} | amount={} | items={}",
+                    orderCode,
+                    normalizedPhone,
+                    calculatedTotal,
+                    request.getItems().stream()
+                            .map(i -> i.getItemCode() + ":qty=" + i.getQuantity() + ":price=" + i.getWholesalePrice())
+                            .collect(Collectors.joining(", ")));
+
             String checkoutRequestId = initiateStkPush(
-                    request.getPhoneNumber(),
+                    normalizedPhone,
                     calculatedTotal,
                     orderCode
             );
+
+            log.info("checking checkoutRequestId {}", checkoutRequestId);
             order.setCheckoutRequestId(checkoutRequestId);
         }
 
@@ -121,6 +139,23 @@ public class OrderService {
         }
 
         return savedOrder;
+    }
+
+    private String normalizeMsisdn(String phone) {
+        if (phone == null || phone.isBlank()) {
+            throw new IllegalArgumentException("Phone number is required");
+        }
+        String digits = phone.replaceAll("[^0-9]", "");
+        if (digits.startsWith("0") && digits.length() == 10) {
+            return "254" + digits.substring(1);
+        }
+        if (digits.startsWith("254") && digits.length() == 12) {
+            return digits;
+        }
+        if (digits.startsWith("7") && digits.length() == 9) {
+            return "254" + digits;
+        }
+        throw new IllegalArgumentException("Invalid phone number format: " + phone);
     }
     // Extracted STK method — throws if it fails, @Transactional rolls everything back
     private String initiateStkPush(String phoneNumber, BigDecimal amount, String orderCode) {
@@ -134,13 +169,14 @@ public class OrderService {
                 stkRequest,
                 Map.class
         );
+        log.info("STK Push Raw Response: {}", response);
 
         if (!response.getStatusCode().is2xxSuccessful() || response.getBody() == null) {
             throw new RuntimeException("Payment initiation failed for order " + orderCode);
         }
 
         Map<String, Object> data = (Map<String, Object>) response.getBody().get("data");
-        String checkoutRequestId = (String) data.get("CheckoutRequestID");
+        String checkoutRequestId = (String) data.get("paymentReference");
 
         if (checkoutRequestId == null || checkoutRequestId.isBlank()) {
             throw new RuntimeException("Invalid STK response — no CheckoutRequestID for order " + orderCode);
@@ -164,7 +200,7 @@ public class OrderService {
 
         try {
             Map<String, Object> confirmRequest = Map.of(
-                    "CheckoutRequestId", order.getCheckoutRequestId()
+                    "paymentReference", order.getCheckoutRequestId()
             );
 
             log.info("Checking payment status for Order: {} | CheckoutRequestID: {}",
@@ -193,12 +229,38 @@ public class OrderService {
             boolean isPaid = isPaymentSuccessful(response.getBody());
 
             if (isPaid) {
+
+                String mpesaReceipt = null;
+                if (response.getBody() != null) {
+                    Object dataObj = response.getBody().get("data");
+                    if (dataObj instanceof Map) {
+                        Object receipt = ((Map<?, ?>) dataObj).get("MpesaReceipt");
+                        if (receipt != null) {
+                            mpesaReceipt = receipt.toString().trim();
+                        }
+                    }
+                }
                 order.setStatus(OrderStatus.PAID);
                 order.setPaymentDate(LocalDateTime.now());
-                order.setPaymentReference(order.getCheckoutRequestId());
+                order.setPaymentReference(
+                        mpesaReceipt != null && !mpesaReceipt.isBlank()
+                                ? mpesaReceipt
+                                : order.getCheckoutRequestId()
+                );
                 orderRepository.save(order);
 
                 log.info("✅ PAYMENT SUCCESSFUL - Order {} marked as PAID", orderCode);
+
+                log.info("✅ PAYMENT SUCCESSFUL - Order {} marked as PAID. Attempting auto-fulfillment...", orderCode);
+
+                // === AUTO FULFILLMENT ===
+                try {
+                    autoFulfillOrder(order);
+                } catch (Exception autoEx) {
+                    log.warn("Auto-fulfillment failed for order {} (payment was successful). Manual fulfillment still possible.",
+                            orderCode, autoEx);
+                    // Do NOT fail the payment confirmation
+                }
             } else {
                 log.warn("❌ Payment NOT confirmed yet for Order: {}", orderCode);
             }
@@ -213,6 +275,48 @@ public class OrderService {
         } catch (Exception e) {
             log.error("❌ Error checking payment status for order {}", orderCode, e);
             throw new RuntimeException("Failed to check payment status");
+        }
+    }
+
+
+    private void autoFulfillOrder(Order order) {
+        if (order.getStatus() != OrderStatus.PAID) {
+            return;
+        }
+
+        // Determine distributor from the order (this is the key piece)
+        String distributorMerchantId = order.getDistributor() != null
+                ? order.getDistributor().getId().toString()
+                : null;
+
+        if (distributorMerchantId == null || distributorMerchantId.isBlank()) {
+            log.warn("Cannot auto-fulfill order {} - no distributor linked", order.getOrderCode());
+            return;
+        }
+
+        // Use a system/internal user ID for issuedByUserId (create a dedicated system user if possible)
+        // Or use the merchant's user who created the order if you have that info
+        Long systemUserId = 1L; // TODO: Replace with proper system user ID or order creator
+
+        try {
+            OrderFulfillmentResult result = fulfillOrder(
+                    order.getOrderCode(),
+                    distributorMerchantId,
+                    systemUserId,
+                    false  // allowPartial = true for auto-fulfillment (recommended)
+            );
+
+            log.info("✅ Auto-fulfillment completed for order {}. Transfer: {}",
+                    order.getOrderCode(), result.stockTransfer().getTransferCode());
+
+        } catch (CannotFulfillOrderException e) {
+            log.info("Auto-fulfillment partial failure for order {}: {}",
+                    order.getOrderCode(), e.getMessage());
+            // Still success for payment, just stock issue
+        } catch (IllegalArgumentException e) {
+            log.warn("Auto-fulfillment skipped for order {}: {}", order.getOrderCode(), e.getMessage());
+        } catch (Exception e) {
+            log.error("Unexpected error during auto-fulfillment of order {}", order.getOrderCode(), e);
         }
     }
 
@@ -241,13 +345,26 @@ public class OrderService {
     /**
      * Get orders for a Distributor by status
      */
-    public List<Order> getOrdersByDistributorAndStatus(String distributorId, OrderStatus status, PaymentMode paymentMode) {
+    public Page<Order> getOrdersByDistributorAndStatus(
+            String distributorId, OrderStatus status, PaymentMode paymentMode,
+            LocalDate startDate, LocalDate endDate, Pageable pageable) {
+
+        LocalDateTime start = startDate.atStartOfDay();
+        LocalDateTime end = endDate.atTime(LocalTime.MAX);
+        Long distId = Long.parseLong(distributorId);
+
         if (paymentMode != null) {
-            return orderRepository.findByDistributorAndStatusAndPaymentMode(Long.valueOf(distributorId), status, paymentMode);
+            return orderRepository.findByDistributorIdAndStatusAndPaymentModeAndOrderDateBetween(
+                    distId, status, paymentMode, start, end, pageable);
         }
-        return orderRepository.findByDistributorIdAndStatus(
-                Long.parseLong(distributorId), status);
+        return orderRepository.findByDistributorIdAndStatusAndOrderDateBetween(
+                distId, status, start, end, pageable);
     }
+
+
+
+
+
 
     public List<Order> getOrdersByDistributorAndStatus(String distributorId, OrderStatus status) {
         return orderRepository.findByDistributorIdAndStatus(
@@ -284,92 +401,20 @@ public class OrderService {
 
         return "0".equals(resultCode.toString());
     }
-//
-//    @Transactional
-//    public StockTransfer fulfillOrder(String orderCode, String distributorMerchantId, Long issuedByUserId, boolean allowPartial) {
-//
-//        Order order = orderRepository.findByOrderCode(orderCode)
-//                .orElseThrow(() -> new IllegalArgumentException("Order not found"));
-//
-//        List<OrderItem> originalOrderItems = new ArrayList<>(order.getItems());
-//
-//        switch (order.getStatus()) {
-//            case PENDING -> throw new IllegalArgumentException("Order has not been paid yet");
-//            case FULFILLED -> throw new IllegalArgumentException(
-//                    "Order already fulfilled. Transfer: " + order.getStockTransfer().getTransferCode()
-//            );
-//            case RECEIVED -> throw new IllegalArgumentException("Order already received by merchant");
-//            case CANCELLED -> throw new IllegalArgumentException("Order has been cancelled");
-//            case PAID -> {} // valid — proceed
-//        }
-//
-//
-//        if (!order.getDistributor().getId().toString().equals(distributorMerchantId)) {
-//            throw new IllegalArgumentException("You are not the distributor for this order");
-//        }
-//
-//
-//        log.info("\n\n\n");
-//        log.info("Fulfill partial: {}", allowPartial);
-//        log.info("\n\n\n");
-//        //Validate order items. Separate order items that are not in inventory and those that are low in stock
-//        //from order items that are available and have enough stock
-//
-//        ArrayList<InsufficientOrderItem> insufficientOrderItems = new ArrayList<>();
-//        List<OrderItem> orderItems = new ArrayList<>();
-//
-//        validateDistributorStock(order, distributorMerchantId, allowPartial, orderItems, insufficientOrderItems);
-//        //at this point, insufficient order items contains items that are not available in inventory
-//        //or those that are low in stock
-//        //orderItems remains with those that are available in inventory and have enough stock
-//        //to fulfill order request
-//
-//        for(InsufficientOrderItem insufficientOrderItem : insufficientOrderItems)
-//        {
-//            orderItems.add(
-//                    OrderItem.builder()
-//                            .itemCode(insufficientOrderItem.itemCode())
-//                            .itemName(insufficientOrderItem.itemCode())
-//                            .quantity(insufficientOrderItem.availableStock())
-//                            .wholesalePrice(insufficientOrderItem.wholesalePrice())
-//                            .build()
-//            );
-//        }
-//
-//
-//        // Create Stock Transfer from Order
-//        StockTransferRequest transferRequest = createTransferRequestFromOrder(
-//                order.getOrderCode(),
-//                order.getDistributor().getId(),
-//                order.getMerchant().getId(),
-//                orderItems
-//        );
-//
-//        StockTransfer stockTransfer = stockTransferService.createStockTransfer(transferRequest, issuedByUserId);
-//
-//        // Link them
-//        order.markAsFulfilled(stockTransfer);
-//        orderRepository.save(order);
-//
-//        log.info("Order {} fulfilled with Stock Transfer {}", orderCode, stockTransfer.getTransferCode());
-//
-//        return stockTransfer;
-//    }
 
     @Transactional
-    public StockTransfer fulfillOrder(String orderCode, String distributorMerchantId, Long issuedByUserId, boolean allowPartial) {
+    public OrderFulfillmentResult fulfillOrder(String orderCode, String distributorMerchantId, Long issuedByUserId, boolean allowPartial) {
 
         Order order = orderRepository.findByOrderCode(orderCode)
                 .orElseThrow(() -> new IllegalArgumentException("Order not found"));
 
         switch (order.getStatus()) {
-            case PENDING -> throw new IllegalArgumentException("Order has not been paid yet");
             case FULFILLED -> throw new IllegalArgumentException(
                     "Order already fulfilled. Transfer: " + order.getStockTransfer().getTransferCode()
             );
             case RECEIVED -> throw new IllegalArgumentException("Order already received by merchant");
             case CANCELLED -> throw new IllegalArgumentException("Order has been cancelled");
-            case PAID -> {}
+            case PENDING, PAID -> {}
         }
 
         if (!order.getDistributor().getId().toString().equals(distributorMerchantId)) {
@@ -381,14 +426,28 @@ public class OrderService {
 
         validateDistributorStock(order, distributorMerchantId, allowPartial, orderItems, insufficientOrderItems);
 
+        // Merge insufficient items back in ONLY where partial stock actually exists.
+        // Zero-availability items are never added — no phantom zero-quantity transfer/sale rows.
         for (InsufficientOrderItem insufficientOrderItem : insufficientOrderItems) {
+            if (insufficientOrderItem.availableStock() <= 0) {
+                continue; // nothing to ship, nothing to sell — stays flagged in insufficientOrderItems only
+            }
             orderItems.add(
                     OrderItem.builder()
                             .itemCode(insufficientOrderItem.itemCode())
-                            .itemName(insufficientOrderItem.itemCode())
+                            .itemName(insufficientOrderItem.itemName()) // FIX: was itemCode() — corrupted names on every partial fulfillment
                             .quantity(insufficientOrderItem.availableStock())
                             .wholesalePrice(insufficientOrderItem.wholesalePrice())
                             .build()
+            );
+        }
+
+        if (orderItems.isEmpty()) {
+            // Nothing at all could be fulfilled — every item was out of stock.
+            // Don't create an empty StockTransfer; surface this as a full failure.
+            throw new CannotFulfillOrderException(
+                    "No items could be fulfilled — all items are out of stock",
+                    insufficientOrderItems
             );
         }
 
@@ -406,11 +465,11 @@ public class OrderService {
 
         recordFulfillmentSale(distributorMerchantId, orderItems, stockTransfer.getTransferCode(), LocalDateTime.now());
 
-        log.info("Order {} fulfilled with Stock Transfer {}", orderCode, stockTransfer.getTransferCode());
+        log.info("Order {} fulfilled with Stock Transfer {} ({} items shipped, {} items flagged insufficient)",
+                orderCode, stockTransfer.getTransferCode(), orderItems.size(), insufficientOrderItems.size());
 
-        return stockTransfer;
+        return new OrderFulfillmentResult(stockTransfer, insufficientOrderItems);
     }
-
     private void recordFulfillmentSale(
             String distributorMerchantId,
             List<OrderItem> orderItems,
@@ -475,7 +534,7 @@ public class OrderService {
             List<InsufficientOrderItem> insufficientOrderItems
     ) {
         ArrayList<String> insufficientItems = new ArrayList<>();
-        orderItems = new ArrayList<>(order.getItems());
+        orderItems.addAll(order.getItems());   // mutate the caller's list, don't replace it
 
         for (OrderItem item : order.getItems()) {
             Optional<Inventory> stockOpt = inventoryRepository
@@ -492,8 +551,7 @@ public class OrderService {
                         "Item not found in distributor stock"
                 ));
 
-                if(allowPartial)
-                {
+                if (allowPartial) {
                     orderItems.remove(item);
                 }
                 continue;
@@ -517,8 +575,7 @@ public class OrderService {
                         "Items in stock cannot fully fulfill the order"
                 ));
 
-                if(allowPartial)
-                {
+                if (allowPartial) {
                     orderItems.remove(item);
                 }
             }
@@ -553,7 +610,29 @@ public class OrderService {
                 .notes("Fulfillment for Order: " + orderCode)
                 .build();
     }
+    public Map<String, Object> collectStandaloneRetailPayment(String phoneNumber, BigDecimal amount) {
 
+        if (phoneNumber == null || phoneNumber.isBlank() || amount == null || amount.compareTo(BigDecimal.ZERO) <= 0) {
+            throw new IllegalArgumentException("Valid phone number and amount are required");
+        }
+        String normalizedPhone = normalizeMsisdn(phoneNumber);
+
+
+
+
+        // Initiate STK Push
+        String checkoutRequestId = initiateStkPush(phoneNumber, amount, "RETAIL-" + System.currentTimeMillis());
+
+        log.info("Retail standalone payment initiated | Phone: {} | Amount: {} | CheckoutID: {}",
+                normalizedPhone, amount, checkoutRequestId);
+
+        return Map.of(
+                "checkoutRequestId", checkoutRequestId,
+                "phoneNumber", phoneNumber,
+                "amount", amount,
+                "transactionRef", "RETAIL-" + Instant.now().toEpochMilli()
+        );
+    }
     @Transactional
     public Map<String, Object> collectDeliveryPayment(String orderCode, String overridePhone) {
 
