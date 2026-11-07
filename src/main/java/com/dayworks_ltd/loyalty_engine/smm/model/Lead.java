@@ -83,6 +83,18 @@ public class Lead {
     @Column(name = "ai_tags", length = 500)
     private String aiTags;                        // e.g. "size inquiry, urgent, price sensitive"
 
+    // SokoReply: how close to buying, which Reel brought them, whether they are in a delivery zone
+    @Enumerated(EnumType.STRING)
+    @Column(length = 8)
+    private Temperature temperature;
+
+    @Column(name = "post_id", length = 64)
+    private String postId;
+
+    /** True when the place they gave is in one of the seller's delivery zones; null = no place given. */
+    @Column(name = "zone_match")
+    private Boolean zoneMatch;
+
     // Timestamps
     @Column(name = "first_contact_at", nullable = false)
     private LocalDateTime firstContactAt = LocalDateTime.now();
@@ -103,6 +115,11 @@ public class Lead {
     protected void onCreate() {
         this.createdAt = LocalDateTime.now();
         this.updatedAt = LocalDateTime.now();
+        // The builder skips the field defaults above; these columns are NOT NULL
+        if (this.firstContactAt == null) this.firstContactAt = this.createdAt;
+        if (this.lastContactAt == null) this.lastContactAt = this.createdAt;
+        if (this.status == null) this.status = LeadStatus.NEW;
+        if (this.messageCount == null) this.messageCount = 1;
     }
 
     @PreUpdate
@@ -122,5 +139,10 @@ public class Lead {
 
     public enum LeadStatus {
         NEW, CONTACTED, HOT, FOLLOWED_UP, CONVERTED, LOST, SPAM
+    }
+
+    /** COLD: praise or no buying sign; WARM: asked price, size or place; HOT: wants it now, left a number, or asked to be called. */
+    public enum Temperature {
+        COLD, WARM, HOT
     }
 }

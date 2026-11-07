@@ -1,0 +1,14 @@
+-- SokoReply, Phase 1 tables.
+-- Hibernate (ddl-auto=update) creates the smm_* tables and the new columns on inventory_stock, orders and
+-- smm_leads when the new jar starts. Nothing here needs running in the normal case.
+--
+-- Check after the deploy: orders.order_source must allow SOCIAL. Hibernate added it on the local database,
+-- but if this shows the old list without SOCIAL:
+--   SELECT column_type FROM information_schema.columns
+--    WHERE table_schema = 'loyalty' AND table_name = 'orders' AND column_name = 'order_source';
+-- then run this once (it keeps every existing value):
+--   ALTER TABLE orders MODIFY order_source ENUM('CUSTOMER','DISTRIBUTOR','REP','SHOP','SOCIAL') NULL;
+--
+-- Page tokens are encrypted with smm.token-secret (server config). Set it before connecting the first Page:
+--   smm.token-secret=<a long random string, kept only in /root/TrcTenants/config/application.properties>
+-- Changing it later makes stored tokens unreadable: the seller then reconnects their Page.

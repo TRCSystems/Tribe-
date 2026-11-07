@@ -113,6 +113,13 @@ public class Order {
     @Column(name = "crm_message_id")
     private Long crmMessageId;
 
+    /** SOCIAL orders: the Reel (platform post ID) and the comment the buyer came from, so revenue is traced to the post. */
+    @Column(name = "social_post_id", length = 64)
+    private String socialPostId;
+
+    @Column(name = "social_comment_id", length = 100)
+    private String socialCommentId;
+
     /** Free-text requests from the shop for items not in the catalogue (shop order link). */
     @Column(name = "shop_note", columnDefinition = "TEXT")
     private String shopNote;

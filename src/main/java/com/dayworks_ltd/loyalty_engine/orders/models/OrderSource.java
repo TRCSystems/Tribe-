@@ -9,5 +9,7 @@ public enum OrderSource {
     /** Placed by the shop itself (from a CRM link). */
     SHOP,
     /** Placed by a consumer through the WhatsApp shop assistant (buyer is the store's "WhatsApp customers" account). */
-    CUSTOMER
+    CUSTOMER,
+    /** Placed by a buyer from a Facebook / Instagram comment (SokoReply order link); post and comment are on the order. */
+    SOCIAL
 }

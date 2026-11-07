@@ -94,6 +94,32 @@ public class Inventory {
     @Column(length = 500)
     private String keywords;
 
+    /** GOOD (default when null) or SERVICE: a salon treatment or nail set is booked, not counted on a shelf. */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "item_type", length = 10)
+    private ItemType itemType;
+
+    /**
+     * Colour and size of this row when a product comes in several (e.g. the same dress in green M and black L).
+     * Each colour/size is its own row, grouped under parentCode, so stock is counted per colour and size.
+     */
+    @Column(length = 40)
+    private String colour;
+
+    @Column(length = 20)
+    private String size;
+
+    /** Item code of the product this colour/size belongs to; null for a product without variants. */
+    @Column(name = "parent_code", length = 100)
+    private String parentCode;
+
+    public enum ItemType { GOOD, SERVICE }
+
+    /** Services have no stock to count. */
+    public boolean isService() {
+        return itemType == ItemType.SERVICE;
+    }
+
 
     @Column(name = "wholesale_price", precision = 10, scale = 2)
     private BigDecimal wholesalePrice;
