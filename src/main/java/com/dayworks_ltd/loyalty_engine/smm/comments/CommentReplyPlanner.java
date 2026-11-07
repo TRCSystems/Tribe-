@@ -22,7 +22,8 @@ public final class CommentReplyPlanner {
 
     /** Intents that make the commenter a buyer whatever the buyer flag says. */
     static final Set<Intent> BUYING = EnumSet.of(Intent.PRICE, Intent.LOCATION, Intent.AVAILABILITY,
-            Intent.VARIANT, Intent.READY_TO_BUY, Intent.BOOKING, Intent.CONTACT);
+            Intent.VARIANT, Intent.READY_TO_BUY, Intent.BOOKING, Intent.CONTACT,
+            Intent.SET, Intent.ADVICE, Intent.QUALITY_DOUBT, Intent.BUSINESS_LEAD);
     static final Set<String> BUYING_NAMES = BUYING.stream().map(Enum::name).collect(java.util.stream.Collectors.toUnmodifiableSet());
 
     /**
@@ -91,6 +92,15 @@ public final class CommentReplyPlanner {
             Plan answer = plan(comment, withoutNegative(reading), postItems, shop, commentAge);
             return new Plan(null, answer.privateReply(), true, answer.handover(), answer.demand(), true);
         }
+        if (intent == Intent.AFTER_SALES) {
+            // Someone who already bought: calm reply, the seller is told at once
+            String dm = sw ? "Habari! Asante kwa kununua kwetu 💚 Tueleze kilichotokea (na jina au namba ya oda yako), mwenye duka atakushughulikia sasa hivi."
+                    : "Hi! Thanks for buying from us 💚 Tell us what happened (and your name or order number) and the owner will sort it out right away.";
+            String pub = phone ? privacyReply(sw, canDm, shop)
+                    : canDm ? (sw ? "Tunashughulikia 🙏 Tumekutumia DM." : "We're on it 🙏 We've sent you a DM.")
+                    : (sw ? "Tunashughulikia 🙏" : "We're on it 🙏") + whatsappOnly(sw, shop);
+            return new Plan(pub, canDm ? dm : null, phone, true, null, true);
+        }
         if (!buyer) {
             if (phone) return new Plan(privacyReply(sw, canDm, shop), canDm ? greeting(sw, shop) : null, true, false, null);
             return new Plan(intent == Intent.COMPLIMENT ? (sw ? "Asante sana 💚" : "Thank you so much 💚") : null, null, false, false, null);
@@ -102,6 +112,33 @@ public final class CommentReplyPlanner {
         String size = upper(reading.size());
         boolean unsure = !"high".equalsIgnoreCase(reading.confidence());
         boolean wa = reading.wantsWhatsApp() || phone;
+
+        if (intent == Intent.BUSINESS_LEAD) {
+            // Wholesale, agents, resellers: thank them; the seller takes it from here
+            String dm = sw ? "Habari! Asante kwa kutaka kufanya kazi nasi 💚 Mwenye duka atakuandikia kuhusu bei za jumla na jinsi ya kushirikiana."
+                    : "Hi! Thanks for wanting to work with us 💚 The owner will message you about wholesale prices and how we can work together.";
+            return new Plan(publicFor(sw, canDm, phone, shop, null), canDm ? dm + whatsappLine(sw, shop, true) : null, phone, true, null);
+        }
+        if (intent == Intent.QUALITY_DOUBT || intent == Intent.ADVICE) {
+            // Facts from the catalogue now; the judgement call (is it original, which one suits you) is the seller's
+            List<Item> facts = !product.isEmpty() ? product : postItems == null ? List.of() : postItems;
+            String card = facts.isEmpty() ? greeting(sw, shop) : productCard(sw, facts, shop, wa);
+            String more = intent == Intent.QUALITY_DOUBT
+                    ? (sw ? "\n\nMwenye duka atakujibu kuhusu ubora sasa hivi." : "\n\nThe owner will answer you about the quality right away.")
+                    : (sw ? "\n\nMwenye duka atakushauri sasa hivi." : "\n\nThe owner will advise you right away.");
+            String pub = phone ? privacyReply(sw, canDm, shop)
+                    : canDm ? (sw ? "Swali zuri 🙏 Tumekutumia DM." : "Good question 🙏 We've sent you a DM.")
+                    : (sw ? "Swali zuri 🙏" : "Good question 🙏") + orderLine(sw, shop);
+            return new Plan(pub, canDm ? card + more : null, phone, true, null);
+        }
+        if (intent == Intent.SET && postItems != null && !postItems.isEmpty()) {
+            // Every piece on the post with its price; the seller confirms the set price (sets are priced per seller)
+            List<Item> pieces = postItems.stream().filter(Item::available).toList();
+            String dm = (pieces.isEmpty() ? (sw ? "Habari! Vipande vya set hii vimeisha kwa sasa." : "Hi! The pieces of this set are sold out for now.")
+                    : menu(sw, pieces)) + (sw ? "\n\nTutakuthibitishia bei ya set nzima sasa hivi." : "\n\nWe'll confirm the price for the full set right away.")
+                    + whatsappLine(sw, shop, wa);
+            return new Plan(publicFor(sw, canDm, phone, shop, null), canDm ? dm : null, phone, true, null);
+        }
 
         if (product.isEmpty() && postItems != null && !postItems.isEmpty() && postItems.stream().allMatch(Item::service)) {
             // A salon or nail tech: the post's whole price list answers "how much" / "can I book"
@@ -229,6 +266,22 @@ public final class CommentReplyPlanner {
         if (shop.orderLink() != null) {
             return (services ? (sw ? " Book hapa: " : " Book here: ") : (sw ? " Agiza hapa: " : " Order here: ")) + shop.orderLink();
         }
+        return shop.whatsappLink() == null ? "" : (sw ? " Tuandikie WhatsApp: " : " WhatsApp us: ") + shop.whatsappLink();
+    }
+
+    /** One line per piece on the post, lowest price each: for sets and outfits. */
+    static String menu(boolean sw, List<Item> items) {
+        StringBuilder sb = new StringBuilder(sw ? "Habari! 💚 Vipande vya set hii:" : "Hi! 💚 The pieces in this set:");
+        Map<String, Item> cheapest = new LinkedHashMap<>();
+        for (Item i : items) {
+            Item seen = cheapest.get(i.productCode());
+            if (seen == null || (i.price() != null && (seen.price() == null || i.price().compareTo(seen.price()) < 0))) cheapest.put(i.productCode(), i);
+        }
+        cheapest.values().forEach(i -> sb.append("\n• ").append(i.name()).append(i.price() == null ? "" : ": KES " + kes(i.price())));
+        return sb.toString();
+    }
+
+    private static String whatsappOnly(boolean sw, Shop shop) {
         return shop.whatsappLink() == null ? "" : (sw ? " Tuandikie WhatsApp: " : " WhatsApp us: ") + shop.whatsappLink();
     }
 

@@ -55,9 +55,17 @@ class CommentReaderExam {
         boolean handLabelled() { return line < 221 || line >= 840; }
     }
 
-    record Answer(String intent, boolean buyer, boolean wantsWhatsApp, String language, String error, String confidence, String firstIntent, Boolean secondLook) {
+    record Answer(String intent, boolean buyer, boolean wantsWhatsApp, String language, String error, String confidence, String firstIntent, Boolean secondLook, Boolean negative) {
         Answer(String intent, boolean buyer, boolean wantsWhatsApp, String language, String error) {
-            this(intent, buyer, wantsWhatsApp, language, error, null, null, null);
+            this(intent, buyer, wantsWhatsApp, language, error, null, null, null, null);
+        }
+
+        Answer(String intent, boolean buyer, boolean wantsWhatsApp, String language, String error, String confidence, String firstIntent, Boolean secondLook) {
+            this(intent, buyer, wantsWhatsApp, language, error, confidence, firstIntent, secondLook, null);
+        }
+
+        boolean bad() {
+            return Boolean.TRUE.equals(negative);
         }
     }
 
@@ -148,7 +156,7 @@ class CommentReaderExam {
             for (int attempt = 1; ; attempt++) {
                 try {
                     Reading r = reader.read(text, List.of());
-                    return new Answer(String.valueOf(r.intent()), r.buyer(), r.wantsWhatsApp(), r.language(), null, r.confidence(), null, null);
+                    return new Answer(String.valueOf(r.intent()), r.buyer(), r.wantsWhatsApp(), r.language(), null, r.confidence(), null, null, r.negative());
                 } catch (Exception e) {
                     if (attempt >= 4) return new Answer(null, false, false, null, e.getClass().getSimpleName() + ": " + e.getMessage());
                     sleep(2000L * attempt);
@@ -169,10 +177,10 @@ class CommentReaderExam {
         Function<String, Answer> cheap = claude(first), strong = claude(second);
         return text -> {
             Answer a = cheap.apply(text);
-            if (a.error() != null || !doubtful(a, text)) return new Answer(a.intent(), a.buyer(), a.wantsWhatsApp(), a.language(), a.error(), a.confidence(), a.intent(), false);
+            if (a.error() != null || !doubtful(a, text)) return new Answer(a.intent(), a.buyer(), a.wantsWhatsApp(), a.language(), a.error(), a.confidence(), a.intent(), false, a.negative());
             Answer b = strong.apply(text);
-            if (b.error() != null) return new Answer(a.intent(), a.buyer(), a.wantsWhatsApp(), a.language(), null, a.confidence(), a.intent(), false);
-            return new Answer(b.intent(), b.buyer(), b.wantsWhatsApp(), b.language(), null, b.confidence(), a.intent(), true);
+            if (b.error() != null) return new Answer(a.intent(), a.buyer(), a.wantsWhatsApp(), a.language(), null, a.confidence(), a.intent(), false, a.negative());
+            return new Answer(b.intent(), b.buyer(), b.wantsWhatsApp(), b.language(), null, b.confidence(), a.intent(), true, b.negative());
         };
     }
 
@@ -219,7 +227,7 @@ class CommentReaderExam {
                     JsonNode out = JSON.readTree(JSON.readTree(res.body()).at("/choices/0/message/content").asText());
                     sleep(Long.getLong("exam.groq-pause-ms", 2100L)); // free tier: about 30 requests a minute
                     return new Answer(out.path("intent").asText("OTHER").toUpperCase(Locale.ROOT), out.path("buyer").asBoolean(),
-                            out.path("wantsWhatsApp").asBoolean(), out.path("language").asText(null), null);
+                            out.path("wantsWhatsApp").asBoolean(), out.path("language").asText(null), null, out.path("confidence").asText(null), null, null, out.path("negative").asBoolean());
                 } catch (Exception e) {
                     if (attempt >= 4) return new Answer(null, false, false, null, e.getClass().getSimpleName() + ": " + e.getMessage());
                     sleep(3000L * attempt);
@@ -264,7 +272,11 @@ class CommentReaderExam {
         s.append(row("WhatsApp wish right", rate(done, r -> a.apply(r).wantsWhatsApp() == r.answer().get("wantsWhatsApp").asBoolean()), done.size()));
         s.append(row("Language right (sw/en comments)", rate(swEn, r -> r.answer().get("language").asText().equals(a.apply(r).language())), swEn.size()));
         s.append(String.format("| Non-buyers taken for buyers (would get a sales reply) | %d of %d |%n", falseBuyers, notBuyers.size()));
-        s.append(String.format("| Spam taken for a buyer | %d |%n%n", spamAsBuyer));
+        s.append(String.format("| Spam taken for a buyer | %d |%n", spamAsBuyer));
+        List<Row> bad = done.stream().filter(r -> r.answer().path("negative").asBoolean()).toList();
+        s.append(row("Bad comments caught (hidden + urgent alert)", rate(bad, r -> a.apply(r).bad()), bad.size()));
+        s.append(String.format("| Fine comments flagged as bad (would be hidden) | %d of %d |%n%n",
+                done.stream().filter(r -> !r.answer().path("negative").asBoolean() && a.apply(r).bad()).count(), done.size() - bad.size()));
         long second = done.stream().filter(r -> Boolean.TRUE.equals(a.apply(r).secondLook())).count();
         if (second > 0) s.append(String.format("Second look by the stronger model: %d of %d comments (%.0f%%).%n%n", second, done.size(), 100.0 * second / done.size()));
         s.append(pass ? "**PASS**\n\n" : "**FAIL**\n\n");

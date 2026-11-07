@@ -137,6 +137,66 @@ class CommentReplyPlannerTest {
         assertNull(spam.privateReply());
     }
 
+    static Reading read(Intent i) {
+        return new Reading(i, true, false, null, null, null, "sw", "high");
+    }
+
+    @Test
+    void afterSalesGoesToTheSellerAtOnceWithACalmReply() {
+        Plan p = CommentReplyPlanner.plan("Nilibuy akakata", new Reading(Intent.AFTER_SALES, false, false, null, null, null, "sw", "high"), reel, SHOP, FRESH);
+        assertEquals("Tunashughulikia 🙏 Tumekutumia DM.", p.publicReply());
+        assertTrue(p.privateReply().contains("namba ya oda"));
+        assertTrue(p.handover());
+        assertTrue(p.urgent());
+        assertFalse(p.hideComment(), "a customer asking for help is not hidden; only bad comments are");
+    }
+
+    @Test
+    void businessLeadIsThankedAndHandedToTheSeller() {
+        Plan p = CommentReplyPlanner.plan("Mnauza wholesale? Nataka kuwa agent Arusha", read(Intent.BUSINESS_LEAD), reel, SHOP, FRESH);
+        assertEquals("Asante! Tumekutumia DM 💚", p.publicReply());
+        assertTrue(p.privateReply().contains("bei za jumla"));
+        assertTrue(p.handover());
+        assertFalse(p.urgent());
+    }
+
+    @Test
+    void qualityDoubtGetsTheFactsAndTheSellerAnswersTheRest() {
+        Plan p = CommentReplyPlanner.plan("Hii ni original kweli?", read(Intent.QUALITY_DOUBT), GOWN, SHOP, FRESH);
+        assertEquals("Swali zuri 🙏 Tumekutumia DM.", p.publicReply());
+        assertTrue(p.privateReply().contains("KES 12,500"));
+        assertTrue(p.privateReply().contains("kuhusu ubora"));
+        assertTrue(p.handover(), "the agents never claim it is original: the seller does");
+    }
+
+    @Test
+    void adviceOnASalonPostSendsThePriceListAndTheSellerAdvises() {
+        Plan p = CommentReplyPlanner.plan("Nina 2000 nifanye nini kwa nails?", read(Intent.ADVICE), NAILS, SHOP, FRESH);
+        assertTrue(p.privateReply().contains("Acrylic extensions: KES 2,500"));
+        assertTrue(p.privateReply().contains("atakushauri"));
+        assertTrue(p.handover());
+    }
+
+    @Test
+    void setListsEveryPieceAndTheSellerConfirmsTheSetPrice() {
+        List<Item> outfit = List.of(
+                new Item("TOP-1", "Linen top", "white", "M", new BigDecimal("1800"), 3),
+                new Item("TOP-1", "Linen top", "white", "L", new BigDecimal("1800"), 0),
+                new Item("PANTS-1", "Wide pants", "white", "M", new BigDecimal("2200"), 2));
+        Plan p = CommentReplyPlanner.plan("Complete attire ngapi zote?", read(Intent.SET), outfit, SHOP, FRESH);
+        assertTrue(p.privateReply().contains("• Linen top: KES 1,800"));
+        assertTrue(p.privateReply().contains("• Wide pants: KES 2,200"));
+        assertTrue(p.privateReply().contains("bei ya set nzima"));
+        assertTrue(p.handover());
+    }
+
+    @Test
+    void newIntentsCountAsBuyersForTheSecondLookRule() {
+        for (String i : List.of("SET", "ADVICE", "QUALITY_DOUBT", "BUSINESS_LEAD")) {
+            assertFalse(CommentReader.doubtful(i, false, "high", "x"), i + " is already a buyer: no second look");
+        }
+    }
+
     @Test
     void fraudAccusationIsHiddenAndTheSellerAlertedAtOnce() {
         Reading bad = new Reading(Intent.OTHER, false, false, null, null, null, "sw", "high", true);

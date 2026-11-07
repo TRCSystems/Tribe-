@@ -34,13 +34,28 @@ public class CommentReader {
     private static final Pattern QUESTION_WORD = Pattern.compile("(?i).*\\b(wapi|wp|where|how|ngapi|bei)\\b.*");
 
     /** What the commenter wants. */
-    public enum Intent { PRICE, LOCATION, AVAILABILITY, VARIANT, READY_TO_BUY, BOOKING, CONTACT, COMPLIMENT, COMPLAINT, SPAM, OTHER }
+    public enum Intent {
+        PRICE, LOCATION, AVAILABILITY, VARIANT, READY_TO_BUY, BOOKING, CONTACT, COMPLIMENT, COMPLAINT, SPAM, OTHER,
+        /** Doubts the quality or that it is genuine: "is this original", "fake materials", "inadumu?". */
+        QUALITY_DOUBT,
+        /** Wants to resell or work with the seller: wholesale, agent, commission, "give me job". */
+        BUSINESS_LEAD,
+        /** Asks the seller to advise: "budget 1,000-1,500 for 5 devices", "works on solar?", "size gani inanifaa". */
+        ADVICE,
+        /** Already bought and needs help: delivery not yet, exchange, return, warranty, "nilibuy akakata". */
+        AFTER_SALES,
+        /** Asks about the whole set or outfit: "complete attire", "ngapi zote", "bila fimbo" (without one piece). */
+        SET
+    }
 
     public record Reading(
             @JsonPropertyDescription("PRICE (how much / shingapi / bei), LOCATION (where are you / mko wapi), AVAILABILITY (do you have it / iko), "
                     + "VARIANT (asks for a colour or size: 'hio ya green', 'size 12 iko'), READY_TO_BUY (wants it now: naitaka, nataka, I'll take it, "
                     + "how do I order), BOOKING (wants an appointment or slot for a service: book, appointment, mko free, naweza kuja kesho), "
-                    + "CONTACT (only asks to be reached: wp, WhatsApp, inbox, DM me, namba yako), COMPLIMENT (praise, flirting or jokes only), COMPLAINT (unhappy customer), SPAM (unrelated, links, promotions), OTHER")
+                    + "CONTACT (only asks to be reached: wp, WhatsApp, inbox, DM me, namba yako), COMPLIMENT (praise, flirting or jokes only), COMPLAINT (unhappy customer), SPAM (unrelated, links, promotions), "
+                    + "QUALITY_DOUBT (is it original, fake, will it last), BUSINESS_LEAD (wholesale, agent, commission, resell, job), "
+                    + "ADVICE (asks what to choose or whether it suits their need), AFTER_SALES (already bought: delivery, exchange, return, warranty, broke), "
+                    + "SET (the whole set or outfit, all pieces together, or the set without one piece), OTHER")
             Intent intent,
             @JsonPropertyDescription("True when the person shows any interest in buying (asking price, location, stock, colour, size, how to order)")
             boolean buyer,
@@ -133,7 +148,12 @@ public class CommentReader {
                 - Questions about the product itself show buying interest (buyer true): does it stretch ("inastrenji"), 5G or 4G, two-piece or one, the material, how a size fits, warranty, are you open today. Use VARIANT for size, colour or fit, AVAILABILITY for stock or opening, otherwise OTHER.
                 - Someone criticising the seller for not answering or not posting the price ("mnapost hamjibu", "put the price") is a would-be buyer: buyer true, PRICE if they want the price, otherwise OTHER.
                 "Inapatikana" means "is it available"; "dada", "sis", "mrembo" are friendly ways of addressing the seller, not products.
-                A comment can ask several things; pick the strongest buying intent (READY_TO_BUY > BOOKING > VARIANT > AVAILABILITY > PRICE > LOCATION > CONTACT).
+                - Quality doubt: "is this original", "si fake?", "fake materials", "inadumu?", "hazina base", "quality iko aje". A fair doubt is QUALITY_DOUBT with buyer true; an accusation of fraud is negative (see bad comments).
+                - Business lead: "mnauza wholesale", "weka agent Arusha", "nataka kuuza", "commission", "supply", "give me job", "can I be your distributor". buyer true.
+                - Advice: "budget 1,000-1,500 for 5 devices", "works on solar?", "size gani inanifaa", "which colour suits me", "what do you recommend". buyer true.
+                - After sales, from someone who already bought: "nimeorder jana bado", "nilibuy akakata", "can I exchange", "warranty", "return". Use COMPLAINT instead when they are angry or say they were cheated.
+                - Set: "complete attire", "the whole outfit", "ngapi zote", "set nzima", "3 in 1 price", "bila fimbo" (the set without one piece). buyer true.
+                A comment can ask several things; pick the strongest (COMPLAINT > AFTER_SALES > SET > READY_TO_BUY > BOOKING > VARIANT > AVAILABILITY > PRICE > LOCATION > ADVICE > QUALITY_DOUBT > BUSINESS_LEAD > CONTACT).
                 Emojis alone, "😍", "beautiful", "nice", "🔥", "iko sawa", "safi", "poa", flirting or jokes about the model ("why do you look like a queen", "you're pretty, where are you?", "naeza pata uyu mrembo") are COMPLIMENT, buyer false. Tagging a friend with no question is OTHER.
                 Bad comments: set negative true for a customer complaint ("nililipa sijapata", "nimeletewa kitu mbaya"), accusing the seller of fraud or theft ("hawa ni wezi", "matapeli", "conman", "scam"), insults, or mocking the seller's work ("you suck at your job", "zimeharibika"). A complaint from someone who bought is COMPLAINT. Someone who has not bought but is criticising keeps their real intent (a would-be buyer annoyed that nobody answers is still PRICE or OTHER with buyer true). Fair questions or mild doubts ("is it original?", "inadumu?") are not negative.
                 SPAM is anyone pulling people away to their own thing, not asking about this seller's product: "come to my private chat", "check your inbox / hidden messages", "write to me", "inbox me for an offer", links to other channels, groups or apps (betting, loans, forex, "earn 50k daily", "download ..."), "I won 17m on SportPesa" bait, bot-like messages in other alphabets asking to be answered (for example Russian "Написал Вам... Проверьте скрытые"), and religious quotes or long stories unrelated to the product. Spam is never CONTACT and never a buyer, even when it mentions chat, inbox or a number. The difference: a buyer wants the seller to contact them about this product ("inbox me the price", "nitumie namba"); a spammer invites people to their own chat, link or offer.
