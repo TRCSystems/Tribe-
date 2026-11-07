@@ -1,9 +1,11 @@
 package com.dayworks_ltd.loyalty_engine.auth.config;
 
+import java.io.IOException;
 import com.dayworks_ltd.loyalty_engine.auth.model.CustomUserDetails;
 import com.dayworks_ltd.loyalty_engine.auth.services.CustomUserDetailsService;
 import com.dayworks_ltd.loyalty_engine.auth.services.JWTService;
 import jakarta.servlet.FilterChain;
+import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -30,7 +32,7 @@ public class JWTAuthenticationFilter extends OncePerRequestFilter {
     @Override
     protected void doFilterInternal(HttpServletRequest request,
                                     HttpServletResponse response,
-                                    FilterChain filterChain)
+                                    FilterChain filterChain) throws ServletException, IOException
     {
         try{
             final String authHeader = request.getHeader("Authorization");
@@ -42,9 +44,22 @@ public class JWTAuthenticationFilter extends OncePerRequestFilter {
             if( authHeader == null || !authHeader.startsWith("Bearer ") )
             {
                 System.out.println("No Bearer token found");
-                filterChain.doFilter(request, response);
-                return;
+            } else {
+                authenticateFromToken(request, authHeader);
             }
+        } catch (Exception e) {
+            // An expired or broken token means "not logged in". The request must still continue:
+            // public pages (shop order links, webhooks) answer normally and protected ones reply 401.
+            // (Stopping here used to send an empty 200 for every request carrying a stale token.)
+            System.out.println(" Filter Exception: " + e.getMessage());
+            Logger.getAnonymousLogger().log(Level.WARNING, "Ignoring unusable login token: " + e.getMessage());
+            SecurityContextHolder.clearContext();
+        }
+        filterChain.doFilter(request, response);
+    }
+
+    private void authenticateFromToken(HttpServletRequest request, String authHeader) {
+        {
 
             String jwt = authHeader.substring(7);
             String username = jwtService.extractUsername(jwt);
@@ -79,12 +94,6 @@ public class JWTAuthenticationFilter extends OncePerRequestFilter {
                     System.out.println("✗ Token is INVALID");
                 }
             }
-
-            filterChain.doFilter(request, response);
-        } catch (Exception e) {
-            System.out.println(" Filter Exception: " + e.getMessage());
-            e.printStackTrace();
-            Logger.getAnonymousLogger().log(Level.SEVERE, "Error: " + e.getMessage());
         }
     }
 }

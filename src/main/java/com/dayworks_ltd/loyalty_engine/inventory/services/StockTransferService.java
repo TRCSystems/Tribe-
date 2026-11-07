@@ -102,8 +102,8 @@ public class StockTransferService {
             throw new IllegalArgumentException("Not enough stock for " + item.getItemName());
         }
 
-        item.setAvailableStock(newAvailable);
-        item.setClosingStock(newAvailable);
+        // Stock issued to a retailer: reduces stock (not a sale), totals kept consistent
+        item.removeStock(quantity, false);
         item.setLastUpdated(LocalDateTime.now());
 
         Inventory saved = inventoryRepository.save(item);
@@ -214,10 +214,7 @@ public class StockTransferService {
         Inventory inventory = inventoryRepository.findByMerchantIdAndItemCode(merchantId, itemCode)
                 .orElseGet(() -> createNewInventoryItem(merchantId, itemCode, itemName, wholesalePrice));
 
-        // Increase addedStock and availableStock
-        inventory.setAddedStock(inventory.getAddedStock() + quantity);
-        inventory.setAvailableStock(inventory.getAvailableStock() + quantity);
-        inventory.setClosingStock(inventory.getAvailableStock());
+        inventory.addStock(quantity);
         inventory.setLastUpdated(LocalDateTime.now());
 
         inventoryRepository.save(inventory);

@@ -61,7 +61,7 @@ public class WebSecurityConfig {
 
                         // Merchants
                         .requestMatchers(HttpMethod.GET, "/api/v1/merchants/{id}", "/api/v1/merchants/till/{tillNumber}")
-                        .hasAnyRole(UserRole.ADMIN.name(), UserRole.MERCHANT.name(), UserRole.SALES_PERSON.name())
+                        .hasAnyRole(UserRole.ADMIN.name(), UserRole.MERCHANT.name(), UserRole.SALES_PERSON.name(), UserRole.FIELD_REP.name())
                         .requestMatchers(HttpMethod.PUT, "/api/v1/merchants/{id}")
                         .hasAnyRole(UserRole.ADMIN.name(), UserRole.MERCHANT.name())
                         .requestMatchers("/api/v1/merchants/**").hasRole(UserRole.ADMIN.name())
@@ -70,8 +70,17 @@ public class WebSecurityConfig {
                         .requestMatchers("/api/v1/campaigns/**")
                         .hasAnyRole(UserRole.ADMIN.name(), UserRole.MERCHANT.name(), UserRole.SALES_PERSON.name())
                         .requestMatchers("/api/v1/inventory/**")
-                        .hasAnyRole(UserRole.ADMIN.name(), UserRole.MERCHANT.name(), UserRole.SALES_PERSON.name())
+                        .hasAnyRole(UserRole.ADMIN.name(), UserRole.MERCHANT.name(), UserRole.SALES_PERSON.name(), UserRole.FIELD_REP.name())
+
+                        // CRM (distributor + field reps)
+                        .requestMatchers("/api/v1/crm/**")
+                        .hasAnyRole(UserRole.ADMIN.name(), UserRole.MERCHANT.name(), UserRole.FIELD_REP.name())
                         .requestMatchers("/api/v1/invoices/kra/**").permitAll()
+                        // Shop order page: public, protected by the one-time link token
+                        .requestMatchers("/api/v1/shop-order/**").permitAll()
+                        // WhatsApp: Meta calls these (signed / encrypted); setup is admin only
+                        .requestMatchers("/api/v1/whatsapp/webhook", "/api/v1/whatsapp/flow").permitAll()
+                        .requestMatchers("/api/v1/whatsapp/admin/**").hasRole(UserRole.ADMIN.name())
                         .requestMatchers("/api/v1/invoices/**")
                           // ← Add this line
                         .hasAnyRole(UserRole.ADMIN.name(), UserRole.MERCHANT.name())

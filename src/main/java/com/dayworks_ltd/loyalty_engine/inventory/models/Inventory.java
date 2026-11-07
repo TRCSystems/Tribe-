@@ -90,6 +90,10 @@ public class Inventory {
     @Column(name = "product_brand")
     private String productBrand;
 
+    /** Other names customers use for the item (e.g. "unga, maize flour"), for matching typed lists. */
+    @Column(length = 500)
+    private String keywords;
+
 
     @Column(name = "wholesale_price", precision = 10, scale = 2)
     private BigDecimal wholesalePrice;
@@ -97,12 +101,50 @@ public class Inventory {
     @Column(nullable = false)
     private LocalDate recordDate = LocalDate.now();
 
-    // Safe stock calculation
+    /*
+     * Stock rule: availableStock is the truth. Every movement changes it by exactly the moved quantity
+     * (addStock / removeStock), and startingStock is re-derived so that
+     *     startingStock + addedStock - soldStock == availableStock
+     * always holds. Recomputing availableStock from the totals is what made stock jump (e.g. 10 + 20 = 35)
+     * after any path had set availableStock directly (transfers, imports, edits).
+     */
+
+    /** Stock coming in (restock, delivery, transfer received). */
+    public void addStock(int quantity) {
+        this.addedStock = (addedStock != null ? addedStock : 0) + quantity;
+        this.availableStock = (availableStock != null ? availableStock : 0) + quantity;
+        this.closingStock = this.availableStock;
+        syncTotals();
+    }
+
+    /** Stock going out. Sales count towards soldStock; other removals (transfers out) only reduce stock. */
+    public void removeStock(int quantity, boolean isSale) {
+        if (isSale) {
+            this.soldStock = (soldStock != null ? soldStock : 0) + quantity;
+        }
+        this.availableStock = (availableStock != null ? availableStock : 0) - quantity;
+        this.closingStock = this.availableStock;
+        syncTotals();
+    }
+
+    /** Keeps the day's totals consistent with the current stock without ever changing the current stock. */
+    public void syncTotals() {
+        int available = availableStock != null ? availableStock : 0;
+        this.startingStock = available - (addedStock != null ? addedStock : 0) + (soldStock != null ? soldStock : 0);
+    }
+
+    /**
+     * @deprecated Kept for older callers. It no longer recomputes availableStock (that caused stock jumps);
+     * it only re-aligns the totals with the current stock. Use addStock / removeStock to move stock.
+     */
+    @Deprecated
     public void computeAvailableStock() {
-        this.availableStock =
-                (startingStock != null ? startingStock : 0) +
-                        (addedStock != null ? addedStock : 0) -
-                        (soldStock != null ? soldStock : 0);
+        if (availableStock == null) {
+            this.availableStock = (startingStock != null ? startingStock : 0)
+                    + (addedStock != null ? addedStock : 0)
+                    - (soldStock != null ? soldStock : 0);
+        }
+        syncTotals();
     }
 
     public void computeTotalSales() {
@@ -112,10 +154,9 @@ public class Inventory {
         }
     }
     public void applyRestock(int quantity, BigDecimal buyingPrice) {
-        this.addedStock = (this.addedStock != null ? this.addedStock : 0) + quantity;
+        addStock(quantity);
         this.wholesalePrice = buyingPrice;
         this.lastRestockDate = LocalDateTime.now();
         this.lastUpdated = LocalDateTime.now();
-        computeAvailableStock();
     }
 }

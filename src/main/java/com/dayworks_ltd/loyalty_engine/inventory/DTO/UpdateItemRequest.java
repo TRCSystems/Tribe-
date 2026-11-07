@@ -14,7 +14,9 @@ public class UpdateItemRequest {
 
     private String itemName;          // Optional
     private Integer quantity;         // Optional (updates availableStock)
-    private BigDecimal unitPrice;     // Optional
-
+    private BigDecimal unitPrice;     // Optional (selling / retail price)
+    private BigDecimal unitCost;      // Optional (owner only)
+    private BigDecimal wholesalePrice;        // Optional (owner only)
+    private Boolean clearWholesalePrice;      // Optional: true removes the wholesale price (owner only)
 
 }

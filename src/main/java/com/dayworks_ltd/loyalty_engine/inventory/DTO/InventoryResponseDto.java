@@ -51,4 +51,5 @@ public class InventoryResponseDto {
 
     private BigDecimal wholesalePrice;
     private String priceType;
+    private String stockStatus;   // "INSTOCK" | "OUTSTOCK" | "ALERTZONE"
 }

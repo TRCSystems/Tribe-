@@ -19,6 +19,7 @@ import com.dayworks_ltd.loyalty_engine.orders.dto.OrderItemRequest;
 import com.dayworks_ltd.loyalty_engine.orders.dto.OrderRequest;
 import com.dayworks_ltd.loyalty_engine.orders.models.Order;
 import com.dayworks_ltd.loyalty_engine.orders.models.OrderItem;
+import com.dayworks_ltd.loyalty_engine.orders.models.OrderSource;
 import com.dayworks_ltd.loyalty_engine.orders.repositories.OrderRepository;
 import com.dayworks_ltd.loyalty_engine.merchants.Merchant;
 import com.dayworks_ltd.loyalty_engine.merchants.MerchantRepository;
@@ -54,6 +55,8 @@ public class OrderService {
     private final RestTemplate restTemplate;
     private final StockTransferService stockTransferService;
     private final ProductPerformanceService productPerformanceService;
+    private final OrderMarginService orderMarginService;
+    private final com.dayworks_ltd.loyalty_engine.inventory.services.StockAuditRecorder stockAudit;
 
     @Autowired
     private SaleTransactionRepository saleTransactionRepository;
@@ -70,6 +73,13 @@ public class OrderService {
      */
     @Transactional
     public Order createOrder(String distributorMerchantId, OrderRequest request) {
+        return createOrder(distributorMerchantId, request, OrderSource.DISTRIBUTOR, null, null);
+    }
+
+    /** Creates an order and records who placed it (and the CRM message behind it, if any). */
+    @Transactional
+    public Order createOrder(String distributorMerchantId, OrderRequest request,
+                             OrderSource source, Long placedByUserId, Long crmMessageId) {
 
         // Distributor comes from logged-in user
         Merchant distributor = merchantRepository.findById(Long.parseLong(distributorMerchantId))
@@ -95,6 +105,9 @@ public class OrderService {
                 .paymentMode(request.getPaymentMode())
                 .totalAmount(calculatedTotal)
                 .phoneNumber(request.getPhoneNumber())
+                .orderSource(source)
+                .placedByUserId(placedByUserId)
+                .crmMessageId(crmMessageId)
                 .build();
 
         for (OrderItemRequest itemReq : request.getItems()) {
@@ -109,6 +122,9 @@ public class OrderService {
                     .build();
             order.addItem(item);
         }
+        log.info("calling the margin calculator ");
+        orderMarginService.applyProjectedMargin(order,distributorMerchantId);   // <-- add this line
+
         String normalizedPhone = normalizeMsisdn(request.getPhoneNumber());
 
         // PREPAID: STK Push
@@ -152,15 +168,16 @@ public class OrderService {
         if (digits.startsWith("254") && digits.length() == 12) {
             return digits;
         }
-        if (digits.startsWith("7") && digits.length() == 9) {
+        if ((digits.startsWith("7") || digits.startsWith("1")) && digits.length() == 9) {
             return "254" + digits;
         }
         throw new IllegalArgumentException("Invalid phone number format: " + phone);
     }
     // Extracted STK method — throws if it fails, @Transactional rolls everything back
     private String initiateStkPush(String phoneNumber, BigDecimal amount, String orderCode) {
+        // The payment service only accepts 2547XXXXXXXX — stored phones may be 07XXXXXXXX
         Map<String, Object> stkRequest = Map.of(
-                "phoneNumber", phoneNumber,
+                "phoneNumber", normalizeMsisdn(phoneNumber),
                 "amount", amount
         );
 
@@ -228,7 +245,11 @@ public class OrderService {
 
             boolean isPaid = isPaymentSuccessful(response.getBody());
 
-            if (isPaid) {
+            if (isPaid && order.getStatus() == OrderStatus.CANCELLED) {
+                // A prompt sent before the cancel was paid afterwards — never revive or fulfil the order
+                log.error("PAID AFTER CANCEL - Order {} was cancelled but M-Pesa payment succeeded ({}). Refund needed.",
+                        orderCode, order.getCheckoutRequestId());
+            } else if (isPaid) {
 
                 String mpesaReceipt = null;
                 if (response.getBody() != null) {
@@ -279,8 +300,71 @@ public class OrderService {
     }
 
 
+    /**
+     * A paid consumer order reduces the store's stock as a sale (recorded in the stock audit trail).
+     * Stock was checked when the customer confirmed; if it ran short since, it goes no lower than 0.
+     */
+    void recordCustomerSale(Order order) {
+        String storeId = order.getDistributor().getId().toString();
+        for (OrderItem item : order.getItems()) {
+            inventoryRepository.findByMerchantIdAndItemCode(storeId, item.getItemCode()).ifPresent(stock -> {
+                int before = stock.getAvailableStock() == null ? 0 : stock.getAvailableStock();
+                int qty = Math.min(item.getQuantity(), Math.max(before, 0));
+                if (qty < item.getQuantity()) {
+                    log.warn("Customer order {}: only {} of {} {} left", order.getOrderCode(), before, item.getQuantity(), item.getItemCode());
+                }
+                stock.removeStock(qty, true);
+                stock.setTotalSales((stock.getTotalSales() == null ? BigDecimal.ZERO : stock.getTotalSales())
+                        .add(item.getLineTotal() == null ? BigDecimal.ZERO : item.getLineTotal()));
+                stock.setLastUpdated(LocalDateTime.now());
+                Inventory saved = inventoryRepository.save(stock);
+                stockAudit.record(saved, "SALE", before, saved.getAvailableStock(), order.getOrderCode(), "WHATSAPP",
+                        "WhatsApp order" + (order.getCustomerName() == null ? "" : " for " + order.getCustomerName()));
+            });
+        }
+    }
+
+    /**
+     * Store staff move a paid consumer order along: DISPATCHED (on the way) or DELIVERED.
+     * Returns the updated order so the caller can tell the customer on WhatsApp.
+     */
+    @Transactional
+    public Order updateCustomerOrder(String orderCode, String storeMerchantId, String step) {
+        Order order = orderRepository.findByOrderCode(orderCode)
+                .orElseThrow(() -> new IllegalArgumentException("Order not found"));
+        if (!order.getDistributor().getId().toString().equals(storeMerchantId)) {
+            throw new IllegalArgumentException("This order belongs to another store");
+        }
+        if (order.getOrderSource() != OrderSource.CUSTOMER) {
+            throw new IllegalArgumentException("Only customer delivery orders can be marked dispatched or delivered");
+        }
+        switch (String.valueOf(step).toUpperCase()) {
+            case "DISPATCHED" -> {
+                if (order.getStatus() != OrderStatus.PAID) {
+                    throw new IllegalArgumentException(order.getStatus() == OrderStatus.PENDING
+                            ? "The customer hasn't paid yet" : "Order is already " + order.getStatus().name().toLowerCase());
+                }
+                order.setStatus(OrderStatus.FULFILLED);
+                order.setFulfilledDate(LocalDateTime.now());
+            }
+            case "DELIVERED" -> {
+                if (order.getStatus() != OrderStatus.FULFILLED && order.getStatus() != OrderStatus.PAID) {
+                    throw new IllegalArgumentException("Mark the order dispatched first");
+                }
+                order.markAsReceived();
+            }
+            default -> throw new IllegalArgumentException("Step must be DISPATCHED or DELIVERED");
+        }
+        return orderRepository.save(order);
+    }
+
     private void autoFulfillOrder(Order order) {
         if (order.getStatus() != OrderStatus.PAID) {
+            return;
+        }
+        // Consumer orders don't move stock to another shop: the store's stock is reduced as a sale instead
+        if (order.getOrderSource() == OrderSource.CUSTOMER) {
+            recordCustomerSale(order);
             return;
         }
 
@@ -402,11 +486,65 @@ public class OrderService {
         return "0".equals(resultCode.toString());
     }
 
+    /**
+     * Distributor cancels an order that hasn't been paid or dispatched, with a required reason.
+     * Paid orders need a refund first; fulfilled/received orders have already moved stock.
+     */
+    @Transactional
+    public Order cancelOrder(String orderCode, String distributorMerchantId, Long userId, String reason) {
+        String cleanReason = reason == null ? "" : reason.replaceAll("[\\r\\n\\t]+", " ").trim();
+        if (cleanReason.length() < 3) {
+            throw new IllegalArgumentException("Give a reason for cancelling this order");
+        }
+        if (cleanReason.length() > 500) {
+            throw new IllegalArgumentException("Keep the reason under 500 characters");
+        }
+
+        Order order = orderRepository.findByOrderCode(orderCode)
+                .orElseThrow(() -> new IllegalArgumentException("Order not found"));
+        if (!order.getDistributor().getId().toString().equals(distributorMerchantId)) {
+            throw new IllegalArgumentException("You are not the distributor for this order");
+        }
+
+        switch (order.getStatus()) {
+            case PENDING, PENDING_PAYMENT, PAYMENT_FAILED, OVERDUE -> {}
+            case CANCELLED -> throw new IllegalArgumentException("Order is already cancelled");
+            case PAID, PARTIAL_PAYMENT -> throw new IllegalArgumentException(
+                    "This order has been paid — refund the shop first, then cancel");
+            case FULFILLED, RECEIVED -> throw new IllegalArgumentException(
+                    "This order has already been dispatched — stock has left the store, so it can't be cancelled");
+            default -> throw new IllegalArgumentException(
+                    "Orders in status " + order.getStatus() + " can't be cancelled");
+        }
+
+        // An M-Pesa prompt may have been paid since we last looked — check before cancelling
+        if (order.getCheckoutRequestId() != null) {
+            try {
+                checkPaymentStatus(orderCode);
+            } catch (Exception e) {
+                log.warn("Could not confirm payment status before cancelling order {}: {}", orderCode, e.getMessage());
+            }
+            if (order.getStatus() == OrderStatus.PAID || order.getStatus() == OrderStatus.FULFILLED) {
+                throw new IllegalArgumentException("The shop has just paid for this order — it can't be cancelled");
+            }
+        }
+
+        order.setStatus(OrderStatus.CANCELLED);
+        order.setCancelReason(cleanReason);
+        order.setCancelledAt(LocalDateTime.now());
+        order.setCancelledByUserId(userId);
+        log.info("Order {} cancelled by user {} (distributor {}): {}", orderCode, userId, distributorMerchantId, cleanReason);
+        return orderRepository.save(order);
+    }
+
     @Transactional
     public OrderFulfillmentResult fulfillOrder(String orderCode, String distributorMerchantId, Long issuedByUserId, boolean allowPartial) {
 
         Order order = orderRepository.findByOrderCode(orderCode)
                 .orElseThrow(() -> new IllegalArgumentException("Order not found"));
+        if (order.getOrderSource() == OrderSource.CUSTOMER) {
+            throw new IllegalArgumentException("This is a customer delivery order: use Mark dispatched / Mark delivered");
+        }
 
         switch (order.getStatus()) {
             case FULFILLED -> throw new IllegalArgumentException(
@@ -646,6 +784,9 @@ public class OrderService {
         if (order.getStatus() == OrderStatus.PAID || order.getStatus() == OrderStatus.RECEIVED) {
             throw new IllegalArgumentException("Order already completed — cannot collect payment");
         }
+        if (order.getStatus() == OrderStatus.CANCELLED) {
+            throw new IllegalArgumentException("This order has been cancelled");
+        }
 
         String phoneToUse = (overridePhone != null && !overridePhone.isBlank())
                 ? overridePhone
@@ -703,8 +844,11 @@ public class OrderService {
             if (stockOpt.isPresent()) {
                 // Item exists — update stock
                 Inventory stock = stockOpt.get();
+                int before = stock.getAvailableStock() == null ? 0 : stock.getAvailableStock();
                 stock.applyRestock(item.getQuantity(), item.getWholesalePrice());
-                inventoryRepository.save(stock);
+                Inventory saved = inventoryRepository.save(stock);
+                stockAudit.record(saved, "ORDER_RECEIVED", before, saved.getAvailableStock(), orderCode,
+                        receivingMerchantId, "Received from " + order.getDistributor().getBusinessName());
 
                 // Track restock in performance
                 try {
@@ -739,7 +883,9 @@ public class OrderService {
                         .deductions(BigDecimal.ZERO)
                         .build();
 
-                inventoryRepository.save(newStock);
+                Inventory saved = inventoryRepository.save(newStock);
+                stockAudit.record(saved, "ORDER_RECEIVED", 0, saved.getAvailableStock(), orderCode,
+                        receivingMerchantId, "Received from " + order.getDistributor().getBusinessName());
                 log.info("New inventory item created for merchant {} — item: {}",
                         receivingMerchantId, receiverItemCode);
             }

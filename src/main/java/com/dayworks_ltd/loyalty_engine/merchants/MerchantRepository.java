@@ -23,6 +23,9 @@ public interface MerchantRepository extends JpaRepository<Merchant, Long>{
 
     List<Merchant> findByBusinessPhone(String businessPhone);
 
+    /** Shops linked to a distributor. */
+    List<Merchant> findByDistributor_Id(Long distributorId);
+
     List<Merchant> findByBusinessNameContainingIgnoreCase(String businessName);
 
     @Query(value = "SELECT business_name FROM merchants WHERE UPPER(business_type) = 'LIQUOR'",

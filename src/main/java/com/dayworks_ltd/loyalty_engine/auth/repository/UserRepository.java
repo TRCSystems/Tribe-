@@ -96,4 +96,9 @@ public interface UserRepository extends JpaRepository<User, Long> {
     )
     int updateStatus( @Param("userId") Long userId,
                         @Param("newStatus") String newStatus);
+
+    /** Users of a given role linked to a merchant — e.g. a distributor's field reps. */
+    List<User> findByRoleAndMerchant_Id(com.dayworks_ltd.loyalty_engine.auth.enums.UserRole role, Long merchantId);
+
+    boolean existsByUsernameIgnoreCase(String username);
 }

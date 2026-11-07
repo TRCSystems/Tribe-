@@ -36,6 +36,12 @@ public class InventoryService {
     private WholesalePriceConfigRepository wholesalePriceConfigRepository;
     @Autowired
     private DailySalesSummaryRepository dailySalesSummaryRepository;
+    @Autowired
+    private StockVisibility stockVisibility;
+    @Autowired
+    private SalesSummaryService salesSummaryService;
+    @Autowired
+    private StockAuditRecorder stockAudit;
 
     private final ExpenseRepository expenseRepository;
 
@@ -154,6 +160,7 @@ public class InventoryService {
                         Optional<Inventory> existingOpt = inventoryRepository
                                 .findByMerchantIdAndItemCode(merchantId, itemCode);
 
+                        int before = existingOpt.map(i -> i.getAvailableStock() == null ? 0 : i.getAvailableStock()).orElse(0);
                         Inventory inv;
                         if (existingOpt.isPresent()) {
                             inv = existingOpt.get();
@@ -176,11 +183,15 @@ public class InventoryService {
 
                         inv.setUnitPrice(BigDecimal.valueOf(unitPrice));
                         inv.setUnitCost(BigDecimal.valueOf(unitCost));
-                        inv.setStartingStock(startingStock);
+                        // Imported figure becomes the current stock; keep the day's totals consistent with it
                         inv.setAvailableStock(startingStock);
+                        inv.setClosingStock(startingStock);
+                        inv.syncTotals();
                         inv.setRecordDate(today);
 
-                        inventoryRepository.save(inv);
+                        Inventory savedInv = inventoryRepository.save(inv);
+                        stockAudit.record(savedInv, StockAuditRecorder.IMPORT, before, startingStock,
+                                file.getOriginalFilename(), merchantId, "Stock set from imported file");
                     }
                 }
 
@@ -214,6 +225,7 @@ public class InventoryService {
                         Optional<Inventory> existingOpt = inventoryRepository
                                 .findByMerchantIdAndItemCode(merchantId, itemCode);
 
+                        int before = existingOpt.map(i -> i.getAvailableStock() == null ? 0 : i.getAvailableStock()).orElse(0);
                         Inventory inv;
                         if (existingOpt.isPresent()) {
                             inv = existingOpt.get();
@@ -236,11 +248,15 @@ public class InventoryService {
 
                         inv.setUnitPrice(BigDecimal.valueOf(unitPrice));
                         inv.setUnitCost(BigDecimal.valueOf(unitCost));
-                        inv.setStartingStock(startingStock);
+                        // Imported figure becomes the current stock; keep the day's totals consistent with it
                         inv.setAvailableStock(startingStock);
+                        inv.setClosingStock(startingStock);
+                        inv.syncTotals();
                         inv.setRecordDate(today);
 
-                        inventoryRepository.save(inv);
+                        Inventory savedInv = inventoryRepository.save(inv);
+                        stockAudit.record(savedInv, StockAuditRecorder.IMPORT, before, startingStock,
+                                file.getOriginalFilename(), merchantId, "Stock set from imported file");
                     }
                 }
             } else {
@@ -334,7 +350,6 @@ public class InventoryService {
                 item.setTotalSales(BigDecimal.ZERO);
             }
 
-            int newSold = (item.getSoldStock() == null ? 0 : item.getSoldStock()) + itemReq.getQuantity();
             int newAvailable = item.getAvailableStock() - itemReq.getQuantity();
 
             if (newAvailable < 0) {
@@ -342,9 +357,7 @@ public class InventoryService {
             }
 
             BigDecimal saleAmount = item.getUnitPrice().multiply(BigDecimal.valueOf(itemReq.getQuantity()));
-            item.setSoldStock(newSold);
-            item.setAvailableStock(newAvailable);
-            item.setClosingStock(newAvailable);
+            item.removeStock(itemReq.getQuantity(), true);
             item.setTotalSales(item.getTotalSales() == null ? saleAmount : item.getTotalSales().add(saleAmount));
             item.setLastUpdated(LocalDateTime.now());
 
@@ -375,8 +388,7 @@ public class InventoryService {
     @Transactional
     public Inventory recordSale(Long id, int quantitySold, BigDecimal saleAmount) {
         Inventory item = getTodayRecordOrThrow(id);
-        item.setSoldStock(item.getSoldStock() + quantitySold);
-        item.computeAvailableStock();
+        item.removeStock(quantitySold, true);
         item.setTotalSales(item.getTotalSales().add(saleAmount));
         return inventoryRepository.save(item);
     }
@@ -470,9 +482,7 @@ public List<Inventory> addMultipleStock(StockRequest request, String realMerchan
             item.setNetlSales(BigDecimal.ZERO);
         }
 
-        int currentAdded = item.getAddedStock() == null ? 0 : item.getAddedStock();
-        item.setAddedStock(currentAdded + itemReq.getQuantity());
-        item.computeAvailableStock();
+        item.addStock(itemReq.getQuantity());
         item.setLastUpdated(LocalDateTime.now());
 
         Inventory saved = inventoryRepository.save(item);
@@ -669,7 +679,10 @@ public Map<String, Object> closeDay(String merchantId) {
         item.computeAvailableStock();
         item.computeTotalSales();
 
-        return inventoryRepository.save(item);
+        Inventory saved = inventoryRepository.save(item);
+        stockAudit.record(saved, StockAuditRecorder.NEW_ITEM, 0, saved.getAvailableStock(), null,
+                saved.getMerchantId(), "New item with opening stock");
+        return saved;
     }
 
     public Inventory addOrUpdateItem(Inventory item) {
@@ -683,18 +696,24 @@ public Map<String, Object> closeDay(String merchantId) {
 
         if (existing.isPresent()) {
             Inventory existingItem = existing.get();
-            existingItem.setAvailableStock(existingItem.getAvailableStock() + item.getAddedStock());
+            int before = existingItem.getAvailableStock() == null ? 0 : existingItem.getAvailableStock();
+            existingItem.addStock(item.getAddedStock() != null ? item.getAddedStock() : 0);
             existingItem.setUnitPrice(item.getUnitPrice());
             existingItem.setUnitCost(item.getUnitCost());
             existingItem.setRecordDate(LocalDate.now());
             existingItem.computeTotalSales();
-            return inventoryRepository.save(existingItem);
+            Inventory saved = inventoryRepository.save(existingItem);
+            stockAudit.record(saved, "RESTOCK", before, saved.getAvailableStock(), null, saved.getMerchantId(), null);
+            return saved;
         }
 
         // If not found, create new
         item.setAvailableStock(item.getStartingStock());
         item.computeTotalSales();
-        return inventoryRepository.save(item);
+        Inventory saved = inventoryRepository.save(item);
+        stockAudit.record(saved, StockAuditRecorder.NEW_ITEM, 0, saved.getAvailableStock(), null,
+                saved.getMerchantId(), "New item with opening stock");
+        return saved;
     }
 //    public List<WholesaleCatalogDto> getWholesaleCatalog(String merchantId) {
 //        List<Inventory> items = inventoryRepository.findActiveByMerchantId(merchantId);
@@ -729,7 +748,8 @@ public Map<String, Object> closeDay(String merchantId) {
         dto.setInventoryId(item.getId());
         dto.setItemName(item.getItemName());
         dto.setItemCode(item.getItemCode());
-        dto.setWholesalePrice(config.getWholesalePrice());
+        // No wholesale price configured for this item → null price (it used to crash the whole catalogue)
+        dto.setWholesalePrice(config == null ? null : config.getWholesalePrice());
         dto.setAvailability(resolveAvailability(item.getAvailableStock())); // ← replaces availableStock
         dto.setProductImageUrl(item.getProductImageUrl());
         dto.setProductCategory(item.getProductCategory());
@@ -880,11 +900,19 @@ public void recordExpense(String merchantId, BigDecimal amount, String narration
         dto.setItemName(item.getItemName());
         dto.setItemCode(item.getItemCode());
 
-        dto.setStartingStock(item.getStartingStock());
-        dto.setAddedStock(item.getAddedStock());
-        dto.setSoldStock(item.getSoldStock());
-        dto.setAvailableStock(item.getAvailableStock());
-        dto.setClosingStock(item.getClosingStock());
+        int available = item.getAvailableStock() != null ? item.getAvailableStock() : 0;
+
+        if (stockVisibility.isBlindToStock(user)) {
+            // Blind stock: quantities only after owner OTP verification (or ADMIN)
+            dto.setStockStatus(available > 0 ? "INSTOCK" : "OUTSTOCK");
+        } else {
+            dto.setStartingStock(item.getStartingStock());
+            dto.setAddedStock(item.getAddedStock());
+            dto.setSoldStock(item.getSoldStock());
+            dto.setAvailableStock(item.getAvailableStock());
+            dto.setClosingStock(item.getClosingStock());
+            dto.setStockStatus(available == 0 ? "OUTSTOCK" : available < 10 ? "ALERTZONE" : "INSTOCK");
+        }
 
         dto.setTotalSales(item.getTotalSales());
         dto.setGrossSales(item.getGrossSales());
@@ -1002,14 +1030,15 @@ public void recordExpense(String merchantId, BigDecimal amount, String narration
             if (quantity < 0) {
                 throw new IllegalArgumentException("Quantity cannot be negative");
             }
+            // ADMIN correction only (the controller blocks everyone else)
+            int before = item.getAvailableStock() == null ? 0 : item.getAvailableStock();
             item.setAvailableStock(quantity);
-            // DO NOT call computeAvailableStock() here — it would override your direct set!
-            // If you want to keep starting/added/sold in sync, set them manually (e.g. reset soldStock=0)
-            // For now, direct set is fine if this is a manual adjustment
-        } else {
-            // Only recompute if no direct quantity provided
-            item.computeAvailableStock();
+            item.setClosingStock(quantity);
+            stockAudit.record(item, StockAuditRecorder.MANUAL_CORRECTION, before, quantity, null, "ADMIN",
+                    "Quantity corrected by an admin");
         }
+        // Never recompute stock from the totals here — editing a name or price used to make stock jump
+        item.syncTotals();
 
         if (unitPrice != null) {
             if (unitPrice.compareTo(BigDecimal.ZERO) < 0) {
@@ -1096,6 +1125,19 @@ public void recordExpense(String merchantId, BigDecimal amount, String narration
                             .map(this::toBasketLine)
                             .toList());
 
+                    // Margin on this sale: total - cost of the items, only when every line has a cost
+                    boolean complete = basket.getItems().stream().allMatch(l -> l.getLineMargin() != null);
+                    basket.setMarginComplete(complete);
+                    if (complete) {
+                        BigDecimal margin = basket.getItems().stream().map(BasketLineDto::getLineMargin)
+                                .reduce(BigDecimal.ZERO, BigDecimal::add);
+                        basket.setBasketMargin(margin);
+                        basket.setBasketCost(basket.getBasketTotal().subtract(margin));
+                        basket.setMarginPct(basket.getBasketTotal().signum() == 0 ? null
+                                : margin.multiply(BigDecimal.valueOf(100))
+                                .divide(basket.getBasketTotal(), 1, java.math.RoundingMode.HALF_UP));
+                    }
+
                     return basket;
                 })
                 .sorted(Comparator.comparing(BasketDto::getSaleDatetime))
@@ -1112,6 +1154,25 @@ public void recordExpense(String merchantId, BigDecimal amount, String narration
                 .map(BasketDto::getBasketTotal)
                 .reduce(BigDecimal.ZERO, BigDecimal::add));
         report.setTransactions(baskets);
+
+        SalesSummaryService.Summary mtd = salesSummaryService.monthToDate(merchantId, date);
+        report.setMtdFrom(mtd.from());
+        report.setMtdSales(mtd.sales());
+        report.setMtdRevenue(mtd.revenue());
+        report.setMtdMargin(mtd.margin());
+        report.setMtdMarginPct(mtd.marginPct());
+        report.setMtdLinesWithoutCost(mtd.linesWithoutCost());
+
+        List<BasketDto> costed = baskets.stream().filter(b -> Boolean.TRUE.equals(b.getMarginComplete())).toList();
+        report.setSalesWithoutCost(baskets.size() - costed.size());
+        if (!costed.isEmpty()) {
+            BigDecimal margin = costed.stream().map(BasketDto::getBasketMargin).reduce(BigDecimal.ZERO, BigDecimal::add);
+            BigDecimal revenue = costed.stream().map(BasketDto::getBasketTotal).reduce(BigDecimal.ZERO, BigDecimal::add);
+            report.setTotalMargin(margin);
+            report.setTotalCost(revenue.subtract(margin));
+            report.setMarginPct(revenue.signum() == 0 ? null
+                    : margin.multiply(BigDecimal.valueOf(100)).divide(revenue, 1, java.math.RoundingMode.HALF_UP));
+        }
 
         return report;
     }
@@ -1160,6 +1221,11 @@ public void recordExpense(String merchantId, BigDecimal amount, String narration
         dto.setUnitPrice(p.getUnitPrice());
         dto.setTotalPrice(p.getTotalPrice());
         dto.setOrderType(p.getOrderType());
+        BigDecimal cost = p.getUnitCost();
+        if (cost != null && cost.signum() > 0 && p.getTotalPrice() != null && p.getQuantity() != null) {
+            dto.setUnitCost(cost);
+            dto.setLineMargin(p.getTotalPrice().subtract(cost.multiply(BigDecimal.valueOf(p.getQuantity()))));
+        }
         return dto;
     }
 

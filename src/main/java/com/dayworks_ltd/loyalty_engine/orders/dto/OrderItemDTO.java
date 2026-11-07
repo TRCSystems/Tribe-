@@ -18,4 +18,9 @@ public class OrderItemDTO {
     private Integer quantity;
     private BigDecimal wholesalePrice;
     private BigDecimal lineTotal;
+    private BigDecimal retailUnitPrice;
+    private BigDecimal itemMargin;
+    /** Distributor's unit cost (inventory) and margin on this line — distributor view only. */
+    private BigDecimal unitCost;
+    private BigDecimal lineMargin;
 }

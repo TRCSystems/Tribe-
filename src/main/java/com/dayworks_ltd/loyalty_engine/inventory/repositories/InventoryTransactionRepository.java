@@ -26,4 +26,7 @@ public interface InventoryTransactionRepository extends JpaRepository<InventoryT
     @Query("SELECT t FROM InventoryTransaction t WHERE t.merchantId = :merchantId " +
             "ORDER BY t.transactionDate DESC LIMIT 50")
     List<InventoryTransaction> findRecentTransactions(@Param("merchantId") String merchantId);
+
+    List<InventoryTransaction> findByMerchantIdAndItemCodeAndTransactionDateBetweenOrderByTransactionDateAsc(
+            String merchantId, String itemCode, LocalDateTime start, LocalDateTime end);
 }

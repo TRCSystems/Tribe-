@@ -121,6 +121,7 @@ public interface InventoryRepository extends JpaRepository<Inventory, Long> {
         st.quantity AS quantity,
         st.unit_price AS unitPrice,
         st.total_price AS totalPrice,
+        st.unit_cost AS unitCost,
         st.order_type AS orderType,
         m.business_name AS merchantName,
         m.business_phone AS merchantPhone
@@ -137,4 +138,7 @@ public interface InventoryRepository extends JpaRepository<Inventory, Long> {
     List<SaleLineProjection> getReconciliationLines(
             @Param("merchantId") String merchantId,
             @Param("date") LocalDate date);
+
+    Optional<Inventory> findTopByMerchantIdAndItemCodeOrderByRecordDateDesc(
+            String merchantId, String itemCode);
 }

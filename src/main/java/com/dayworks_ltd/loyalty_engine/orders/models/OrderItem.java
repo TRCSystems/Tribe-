@@ -29,4 +29,9 @@ public class OrderItem {
     private Integer quantity;
     private BigDecimal wholesalePrice;
     private BigDecimal lineTotal;
+    @Column(name = "item_margin", precision = 12, scale = 2)
+    private BigDecimal itemMargin;
+    @Column(name = "retail_unit_price", precision = 12, scale = 2)
+    private BigDecimal retailUnitPrice; // resolved from inventory_stock.unit_price at order-creation time; null if unresolvable
+
 }

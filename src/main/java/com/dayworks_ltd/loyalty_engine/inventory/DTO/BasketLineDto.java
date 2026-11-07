@@ -12,5 +12,9 @@ public class BasketLineDto {
     private BigDecimal unitPrice;
     private BigDecimal totalPrice;
     private String orderType;
+    /** Cost recorded on the sale line; null when it wasn't recorded (older sales). */
+    private BigDecimal unitCost;
+    /** totalPrice - unitCost x quantity. Null when the cost is unknown. */
+    private BigDecimal lineMargin;
 
 }

@@ -23,9 +23,11 @@ import java.util.logging.Logger;
 
 public class InvoiceToInventorySyncService {
     private final InventoryRepository inventoryRepository;
+    private final com.dayworks_ltd.loyalty_engine.inventory.services.StockAuditRecorder stockAudit;
 
-    public InvoiceToInventorySyncService(InventoryRepository inventoryRepository) {
+    public InvoiceToInventorySyncService(InventoryRepository inventoryRepository, com.dayworks_ltd.loyalty_engine.inventory.services.StockAuditRecorder stockAudit) {
         this.inventoryRepository = inventoryRepository;
+        this.stockAudit = stockAudit;
     }
 
 
@@ -149,7 +151,10 @@ public class InvoiceToInventorySyncService {
 
         existing.computeAvailableStock();
 
-        return inventoryRepository.save(existing);
+        Inventory saved = inventoryRepository.save(existing);
+        stockAudit.record(saved, com.dayworks_ltd.loyalty_engine.inventory.services.StockAuditRecorder.INVOICE_RECEIPT, currentAvailable, saved.getAvailableStock(), invoiceNumber,
+                saved.getMerchantId(), "Supplier invoice" + (supplierName == null ? "" : " from " + supplierName));
+        return saved;
     }
 
     private Inventory createNewInventory(
@@ -187,7 +192,10 @@ public class InvoiceToInventorySyncService {
 
         inventory.computeAvailableStock();
 
-        return inventoryRepository.save(inventory);
+        Inventory saved = inventoryRepository.save(inventory);
+        stockAudit.record(saved, com.dayworks_ltd.loyalty_engine.inventory.services.StockAuditRecorder.INVOICE_RECEIPT, 0, saved.getAvailableStock(), invoiceNumber,
+                saved.getMerchantId(), "New item from supplier invoice" + (supplierName == null ? "" : " from " + supplierName));
+        return saved;
     }
 
     private String generateItemCode(String itemName) {

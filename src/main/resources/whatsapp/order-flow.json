@@ -1,0 +1,408 @@
+{
+  "version": "6.0",
+  "data_api_version": "3.0",
+  "routing_model": {
+    "ORDER": [
+      "SUMMARY",
+      "CLOSED"
+    ],
+    "SUMMARY": [
+      "DONE",
+      "CLOSED"
+    ],
+    "DONE": [],
+    "CLOSED": []
+  },
+  "screens": [
+    {
+      "id": "ORDER",
+      "title": "Your order",
+      "data": {
+        "heading": {
+          "type": "string",
+          "__example__": "Order from ASANO"
+        },
+        "intro": {
+          "type": "string",
+          "__example__": "Hi Mama Pima, your usual is filled in. Change anything you like."
+        },
+        "catalog": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "title": {
+                "type": "string"
+              },
+              "description": {
+                "type": "string"
+              }
+            }
+          },
+          "__example__": [
+            {
+              "id": "23-TUSKER500",
+              "title": "Tusker 500ml",
+              "description": "KES 2,950"
+            }
+          ]
+        },
+        "extras": {
+          "type": "string",
+          "__example__": ""
+        },
+        "item_1": {
+          "type": "string",
+          "__example__": "23-TUSKER500"
+        },
+        "qty_1": {
+          "type": "string",
+          "__example__": "2"
+        },
+        "item_2": {
+          "type": "string",
+          "__example__": ""
+        },
+        "qty_2": {
+          "type": "string",
+          "__example__": ""
+        },
+        "item_3": {
+          "type": "string",
+          "__example__": ""
+        },
+        "qty_3": {
+          "type": "string",
+          "__example__": ""
+        },
+        "item_4": {
+          "type": "string",
+          "__example__": ""
+        },
+        "qty_4": {
+          "type": "string",
+          "__example__": ""
+        },
+        "item_5": {
+          "type": "string",
+          "__example__": ""
+        },
+        "qty_5": {
+          "type": "string",
+          "__example__": ""
+        },
+        "item_6": {
+          "type": "string",
+          "__example__": ""
+        },
+        "qty_6": {
+          "type": "string",
+          "__example__": ""
+        },
+        "item_7": {
+          "type": "string",
+          "__example__": ""
+        },
+        "qty_7": {
+          "type": "string",
+          "__example__": ""
+        },
+        "item_8": {
+          "type": "string",
+          "__example__": ""
+        },
+        "qty_8": {
+          "type": "string",
+          "__example__": ""
+        }
+      },
+      "layout": {
+        "type": "SingleColumnLayout",
+        "children": [
+          {
+            "type": "TextSubheading",
+            "text": "${data.heading}"
+          },
+          {
+            "type": "TextBody",
+            "text": "${data.intro}"
+          },
+          {
+            "type": "Dropdown",
+            "name": "item_1",
+            "label": "Item 1",
+            "required": false,
+            "data-source": "${data.catalog}",
+            "init-value": "${data.item_1}"
+          },
+          {
+            "type": "TextInput",
+            "name": "qty_1",
+            "label": "Quantity 1",
+            "input-type": "number",
+            "required": false,
+            "init-value": "${data.qty_1}"
+          },
+          {
+            "type": "Dropdown",
+            "name": "item_2",
+            "label": "Item 2",
+            "required": false,
+            "data-source": "${data.catalog}",
+            "init-value": "${data.item_2}"
+          },
+          {
+            "type": "TextInput",
+            "name": "qty_2",
+            "label": "Quantity 2",
+            "input-type": "number",
+            "required": false,
+            "init-value": "${data.qty_2}"
+          },
+          {
+            "type": "Dropdown",
+            "name": "item_3",
+            "label": "Item 3",
+            "required": false,
+            "data-source": "${data.catalog}",
+            "init-value": "${data.item_3}"
+          },
+          {
+            "type": "TextInput",
+            "name": "qty_3",
+            "label": "Quantity 3",
+            "input-type": "number",
+            "required": false,
+            "init-value": "${data.qty_3}"
+          },
+          {
+            "type": "Dropdown",
+            "name": "item_4",
+            "label": "Item 4",
+            "required": false,
+            "data-source": "${data.catalog}",
+            "init-value": "${data.item_4}"
+          },
+          {
+            "type": "TextInput",
+            "name": "qty_4",
+            "label": "Quantity 4",
+            "input-type": "number",
+            "required": false,
+            "init-value": "${data.qty_4}"
+          },
+          {
+            "type": "Dropdown",
+            "name": "item_5",
+            "label": "Item 5",
+            "required": false,
+            "data-source": "${data.catalog}",
+            "init-value": "${data.item_5}"
+          },
+          {
+            "type": "TextInput",
+            "name": "qty_5",
+            "label": "Quantity 5",
+            "input-type": "number",
+            "required": false,
+            "init-value": "${data.qty_5}"
+          },
+          {
+            "type": "Dropdown",
+            "name": "item_6",
+            "label": "Item 6",
+            "required": false,
+            "data-source": "${data.catalog}",
+            "init-value": "${data.item_6}"
+          },
+          {
+            "type": "TextInput",
+            "name": "qty_6",
+            "label": "Quantity 6",
+            "input-type": "number",
+            "required": false,
+            "init-value": "${data.qty_6}"
+          },
+          {
+            "type": "Dropdown",
+            "name": "item_7",
+            "label": "Item 7",
+            "required": false,
+            "data-source": "${data.catalog}",
+            "init-value": "${data.item_7}"
+          },
+          {
+            "type": "TextInput",
+            "name": "qty_7",
+            "label": "Quantity 7",
+            "input-type": "number",
+            "required": false,
+            "init-value": "${data.qty_7}"
+          },
+          {
+            "type": "Dropdown",
+            "name": "item_8",
+            "label": "Item 8",
+            "required": false,
+            "data-source": "${data.catalog}",
+            "init-value": "${data.item_8}"
+          },
+          {
+            "type": "TextInput",
+            "name": "qty_8",
+            "label": "Quantity 8",
+            "input-type": "number",
+            "required": false,
+            "init-value": "${data.qty_8}"
+          },
+          {
+            "type": "TextArea",
+            "name": "extras",
+            "label": "Anything else? (not on list)",
+            "required": false,
+            "max-length": 300,
+            "init-value": "${data.extras}",
+            "helper-text": "e.g. 2 Guinness 500ml - we will confirm the price"
+          },
+          {
+            "type": "Footer",
+            "label": "Review order",
+            "on-click-action": {
+              "name": "data_exchange",
+              "payload": {
+                "action": "review",
+                "item_1": "${form.item_1}",
+                "qty_1": "${form.qty_1}",
+                "item_2": "${form.item_2}",
+                "qty_2": "${form.qty_2}",
+                "item_3": "${form.item_3}",
+                "qty_3": "${form.qty_3}",
+                "item_4": "${form.item_4}",
+                "qty_4": "${form.qty_4}",
+                "item_5": "${form.item_5}",
+                "qty_5": "${form.qty_5}",
+                "item_6": "${form.item_6}",
+                "qty_6": "${form.qty_6}",
+                "item_7": "${form.item_7}",
+                "qty_7": "${form.qty_7}",
+                "item_8": "${form.item_8}",
+                "qty_8": "${form.qty_8}",
+                "extras": "${form.extras}"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "SUMMARY",
+      "title": "Check your order",
+      "data": {
+        "summary": {
+          "type": "string",
+          "__example__": "2 x Tusker 500ml - KES 5,900\nTotal: KES 5,900"
+        },
+        "cart": {
+          "type": "string",
+          "__example__": "[]"
+        }
+      },
+      "layout": {
+        "type": "SingleColumnLayout",
+        "children": [
+          {
+            "type": "TextBody",
+            "text": "${data.summary}"
+          },
+          {
+            "type": "TextCaption",
+            "text": "Pay on delivery, or pay by M-Pesa after ordering. Tap back to change anything."
+          },
+          {
+            "type": "Footer",
+            "label": "Place order",
+            "on-click-action": {
+              "name": "data_exchange",
+              "payload": {
+                "action": "place",
+                "cart": "${data.cart}"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "DONE",
+      "title": "Order placed",
+      "terminal": true,
+      "success": true,
+      "data": {
+        "message": {
+          "type": "string",
+          "__example__": "Order ORD-2601 is with ASANO."
+        },
+        "order_code": {
+          "type": "string",
+          "__example__": "ORD-2601"
+        }
+      },
+      "layout": {
+        "type": "SingleColumnLayout",
+        "children": [
+          {
+            "type": "TextSubheading",
+            "text": "Order imepokelewa!"
+          },
+          {
+            "type": "TextBody",
+            "text": "${data.message}"
+          },
+          {
+            "type": "Footer",
+            "label": "Done",
+            "on-click-action": {
+              "name": "complete",
+              "payload": {
+                "order_code": "${data.order_code}"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "CLOSED",
+      "title": "Order",
+      "terminal": true,
+      "data": {
+        "message": {
+          "type": "string",
+          "__example__": "This order form has expired."
+        }
+      },
+      "layout": {
+        "type": "SingleColumnLayout",
+        "children": [
+          {
+            "type": "TextBody",
+            "text": "${data.message}"
+          },
+          {
+            "type": "Footer",
+            "label": "Close",
+            "on-click-action": {
+              "name": "complete",
+              "payload": {
+                "closed": "yes"
+              }
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

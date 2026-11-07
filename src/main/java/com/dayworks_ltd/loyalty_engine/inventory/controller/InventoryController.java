@@ -1,6 +1,7 @@
 package com.dayworks_ltd.loyalty_engine.inventory.controller;
 
 import com.dayworks_ltd.loyalty_engine.auth.enums.BusinessType;
+import com.dayworks_ltd.loyalty_engine.auth.enums.UserRole;
 import com.dayworks_ltd.loyalty_engine.auth.model.CustomUserDetails;
 import com.dayworks_ltd.loyalty_engine.auth.model.User;
 import com.dayworks_ltd.loyalty_engine.auth.repository.UserRepository;
@@ -14,6 +15,7 @@ import com.dayworks_ltd.loyalty_engine.inventory.repositories.*;
 
 import com.dayworks_ltd.loyalty_engine.inventory.services.InventoryService;
 import com.dayworks_ltd.loyalty_engine.inventory.services.ProductPerformanceService;
+import com.dayworks_ltd.loyalty_engine.inventory.services.StockVisibility;
 
 import com.dayworks_ltd.loyalty_engine.merchants.Merchant;
 import com.dayworks_ltd.loyalty_engine.merchants.MerchantService;
@@ -97,7 +99,13 @@ public class InventoryController {
     private Campaign campaign;
 
     @Autowired
+    private com.dayworks_ltd.loyalty_engine.inventory.services.PricingService pricingService;
+
+    @Autowired
     private MerchantService merchantService;
+
+    @Autowired
+    private StockVisibility stockVisibility;
 
     public InventoryController(ExpenseRepository expenseRepository, DefaultProductRepository defaultProductRepository, ProductPerformanceService productPerformanceService, RecurringExpenseRepository recurringExpenseRepository, WholesalePriceConfigRepository wholesalePriceConfigRepository) {
         this.expenseRepository = expenseRepository;
@@ -237,6 +245,13 @@ public class InventoryController {
 
             String merchantId = user.getMerchantId();
             List<WholesaleCatalogDto> catalog = inventoryService.getWholesaleCatalog(merchantId);
+            if (stockVisibility.isBlindToStock(user)) {
+                catalog.forEach(item -> {
+                    boolean inStock = item.getAvailableStock() != null && item.getAvailableStock() > 0;
+                    item.setAvailableStock(null);
+                    item.setAvailability(inStock ? "IN_STOCK" : "OUT_OF_STOCK");
+                });
+            }
 
             return ResponseEntity.ok(catalog);
 
@@ -443,7 +458,8 @@ public class InventoryController {
 
     @PostMapping("/add-stock")
     @Operation(summary = "Update available stock", description = "update the available stock for a particular inventory item")
-    public ResponseEntity<?> addStock(@RequestBody StockRequest request) {
+    public ResponseEntity<?> addStock(@AuthenticationPrincipal CustomUserDetails principal,
+                                      @RequestBody StockRequest request) {
         try {
             // === SAME PATTERN AS ALL OTHER ENDPOINTS ===
             String userIdStr = request.getMerchantId();  // This is the USER ID from UI
@@ -485,7 +501,7 @@ public class InventoryController {
             return ResponseEntity.ok(Map.of(
                     "status", "SUCCESS",
                     "message", "Stock added successfully",
-                    "data", updatedItems
+                    "data", stockVisibility.forUser(viewer(principal), updatedItems)
             ));
 
         } catch (NumberFormatException e) {
@@ -1127,7 +1143,8 @@ public ResponseEntity<?> getMerchantReport(@PathVariable Long merchantId) {  // 
 
     @PostMapping("/sale")
     @Operation(summary = "Record sale", description = "record retail sale made to customer (supports per-item discount/extra)")
-    public ResponseEntity<?> recordSale(@RequestBody SaleRequest request) {
+    public ResponseEntity<?> recordSale(@AuthenticationPrincipal CustomUserDetails principal,
+                                        @RequestBody SaleRequest request) {
         try {
             // ── Resolve real merchantId ────────────────────────────────────────
             String userIdStr = request.getMerchantId();
@@ -1281,7 +1298,7 @@ public ResponseEntity<?> getMerchantReport(@PathVariable Long merchantId) {  // 
                     "transactionRef", transactionRef,
                     "totalAmount", totalAmount,
                     "itemsSold", saleTransactions.size(),
-                    "data", updatedInventories,
+                    "data", stockVisibility.forUser(viewer(principal), updatedInventories),
                     "saleTransactions", saleTransactions
             ));
 
@@ -1615,10 +1632,30 @@ public ResponseEntity<?> getMerchantReport(@PathVariable Long merchantId) {  // 
 @PutMapping("/{id}/update")
 @Operation(summary = "Update inventory item", description = "Update item name, available stock quantity, unit price, and other details for a specific inventory item. merchantId is required for security.")
 public ResponseEntity<?> updateInventoryItem(
+        @AuthenticationPrincipal CustomUserDetails principal,
         @PathVariable Long id,
         @RequestBody UpdateItemRequest request) {
 
     try {
+        // Quantities can no longer be overwritten from the shop — that is the easiest way to cover a theft.
+        // They change only through restocks, sales, or the owner's review of a stock count. ADMIN may still correct.
+        User editor = viewer(principal);
+        if (request.getQuantity() != null && (editor == null || editor.getRole() != UserRole.ADMIN)) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).body(Map.of(
+                    "status", "FAILURE",
+                    "message", "Stock quantities can't be edited directly. Use Add Stock, or review the item after a stock count."
+            ));
+        }
+        // Prices and costs are owner-only: a wrong price is an easy way to lose money at the till
+        boolean changesPrices = request.getUnitPrice() != null || request.getUnitCost() != null
+                || request.getWholesalePrice() != null || Boolean.TRUE.equals(request.getClearWholesalePrice());
+        if (changesPrices && stockVisibility.isBlindToStock(editor)) {
+            return ResponseEntity.status(HttpStatus.LOCKED).body(Map.of(
+                    "status", "FAILURE",
+                    "message", StockVisibility.LOCKED_MESSAGE
+            ));
+        }
+
         // === SAME PATTERN: merchantId in request is actually USER ID ===
         String userIdStr = request.getMerchantId();
         if (userIdStr == null || userIdStr.isBlank()) {
@@ -1665,13 +1702,22 @@ public ResponseEntity<?> updateInventoryItem(
                 realMerchantId,                    // ← real one
                 request.getItemName(),
                 request.getQuantity(),
-                request.getUnitPrice()
+                null
         );
+        // Prices go through PricingService so every change is logged (and wholesale keeps its history)
+        if (changesPrices) {
+            pricingService.update(realMerchantId, editor.getUserId(), List.of(new com.dayworks_ltd.loyalty_engine
+                    .inventory.services.PricingService.PriceUpdate(id, request.getUnitCost(), request.getUnitPrice(),
+                    request.getWholesalePrice(), request.getClearWholesalePrice())));
+            updatedItem = inventoryService.getInventoryItemById(id);
+        }
 
         return ResponseEntity.ok(Map.of(
                 "status", "SUCCESS",
                 "message", "Inventory item updated successfully",
-                "data", updatedItem
+                "data", stockVisibility.isBlindToStock(editor)
+                        ? StockVisibility.blindView(updatedItem)
+                        : updatedItem
         ));
 
     } catch (NumberFormatException e) {
@@ -1697,10 +1743,19 @@ public ResponseEntity<?> updateInventoryItem(
     @DeleteMapping("/{id}/hard")
     @Operation(summary = "Permanently delete inventory item", description = "Hard delete - completely removes the item from database. Requires merchantId and is irreversible. Use with extreme caution!")
     public ResponseEntity<Map<String, Object>> hardDeleteInventoryItem(
+            @AuthenticationPrincipal CustomUserDetails principal,
             @PathVariable Long id,
             @RequestBody Map<String, String> requestBody) {
 
         try {
+            // Deleting an item would erase it from future counts, so it needs owner verification
+            if (stockVisibility.isBlindToStock(viewer(principal))) {
+                return ResponseEntity.status(HttpStatus.FORBIDDEN).body(Map.of(
+                        "status", "FAILURE",
+                        "message", "Only the owner can delete inventory items (unlock with the SMS code first)"
+                ));
+            }
+
             // === SAME PATTERN: merchantId in body is actually USER ID ===
             String userIdStr = requestBody.get("merchantId");
             if (userIdStr == null || userIdStr.isBlank()) {
@@ -1761,6 +1816,8 @@ public ResponseEntity<?> updateInventoryItem(
         }
     }
 
-
-
+    /** The logged-in user (not the user id sent in the request body). */
+    private User viewer(CustomUserDetails principal) {
+        return principal == null ? null : userRepository.getUserById(principal.getUserId());
+    }
 }

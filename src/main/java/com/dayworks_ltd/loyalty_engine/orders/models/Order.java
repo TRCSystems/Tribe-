@@ -90,6 +90,50 @@ public class Order {
     @Builder.Default
     private BigDecimal financedAmount = BigDecimal.ZERO;
 
+    @Column(name = "projected_margin", precision = 12, scale = 2)
+    private BigDecimal projectedMargin; // ESTIMATE at order-creation time; never a realized/actual margin
+
+    @Column(name = "margin_coverage_ratio", precision = 6, scale = 4)
+    private BigDecimal marginCoverageRatio; // projectedMargin / financedAmount
+
+    @Column(name = "margin_data_complete", nullable = false)
+    @Builder.Default
+    private boolean marginDataComplete = true;
+
+    /** Who placed the order. Null on orders created before CRM tracking (treat as DISTRIBUTOR). */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "order_source", length = 20)
+    private OrderSource orderSource;
+
+    /** User who placed it (distributor user, field rep, or null for a shop link). */
+    @Column(name = "placed_by_user_id")
+    private Long placedByUserId;
+
+    /** CRM message (campaign) that led to this order, when placed from a message link. */
+    @Column(name = "crm_message_id")
+    private Long crmMessageId;
+
+    /** Free-text requests from the shop for items not in the catalogue (shop order link). */
+    @Column(name = "shop_note", columnDefinition = "TEXT")
+    private String shopNote;
+
+    /** Consumer orders (WhatsApp shop assistant): who ordered and where to deliver. */
+    @Column(name = "customer_name", length = 120)
+    private String customerName;
+
+    @Column(name = "delivery_address", columnDefinition = "TEXT")
+    private String deliveryAddress;
+
+    /** Why the distributor cancelled the order (required when cancelling). */
+    @Column(name = "cancel_reason", columnDefinition = "TEXT")
+    private String cancelReason;
+
+    @Column(name = "cancelled_at")
+    private LocalDateTime cancelledAt;
+
+    @Column(name = "cancelled_by_user_id")
+    private Long cancelledByUserId;
+
     // Add this helper method
     public void markAsFulfilled(StockTransfer stockTransfer) {
         this.stockTransfer = stockTransfer;

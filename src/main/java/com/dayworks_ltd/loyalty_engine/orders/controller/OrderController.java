@@ -16,7 +16,10 @@ import com.dayworks_ltd.loyalty_engine.orders.CannotFulfillOrderException;
 import com.dayworks_ltd.loyalty_engine.orders.dto.*;
 import com.dayworks_ltd.loyalty_engine.orders.models.Order;
 import com.dayworks_ltd.loyalty_engine.orders.models.OrderItem;
+import com.dayworks_ltd.loyalty_engine.orders.models.OrderSource;
+import com.dayworks_ltd.loyalty_engine.auth.enums.UserRole;
 import com.dayworks_ltd.loyalty_engine.orders.services.OrderService;
+import com.dayworks_ltd.loyalty_engine.orders.services.OrderProfitService;
 import io.swagger.v3.oas.annotations.Operation;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
@@ -46,6 +49,7 @@ import java.util.Optional;
 public class OrderController {
 
     private final OrderService orderService;
+    private final OrderProfitService orderProfitService;
     private final UserRepository userRepository;
     private final MerchantService merchantService;
     private final MerchantRepository merchantRepository;
@@ -142,7 +146,9 @@ public class OrderController {
                 ));
             }
 
-            Order order = orderService.createOrder(distributorMerchantId, request);
+            // Field reps (SFA) are credited as REP; the distributor's own login as DISTRIBUTOR
+            OrderSource source = user.getRole() == UserRole.FIELD_REP ? OrderSource.REP : OrderSource.DISTRIBUTOR;
+            Order order = orderService.createOrder(distributorMerchantId, request, source, userId, null);
 
             return ResponseEntity.ok(Map.of(
                     "status", "SUCCESS",
@@ -332,6 +338,62 @@ public class OrderController {
 
 
 
+    @PostMapping("/{orderCode}/cancel")
+    @Operation(summary = "Distributor cancels an unpaid, undispatched order", description = "Body: {\"reason\": \"Shop closed for renovation\"}")
+    public ResponseEntity<?> cancelOrder(
+            @AuthenticationPrincipal CustomUserDetails userDetails,
+            @PathVariable String orderCode,
+            @RequestBody(required = false) Map<String, String> body) {
+
+        if (userDetails == null) {
+            return ResponseEntity.status(401).body(Map.of("status", "ERROR", "message", "Unauthorized"));
+        }
+        try {
+            String distributorId = getMerchantIdFromUser(userDetails);
+            Order order = orderService.cancelOrder(orderCode, distributorId, userDetails.getUserId(),
+                    body == null ? null : body.get("reason"));
+            return ResponseEntity.ok(Map.of(
+                    "status", "SUCCESS",
+                    "message", "Order " + orderCode + " cancelled",
+                    "data", mapToOrderResponseDTO(order)
+            ));
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().body(Map.of("status", "FAILURE", "message", e.getMessage()));
+        } catch (Exception e) {
+            logger.info("Error cancelling order {}", orderCode, e);
+            return ResponseEntity.internalServerError().body(Map.of("status", "FAILURE", "message", "Unable to cancel the order"));
+        }
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.dayworks_ltd.loyalty_engine.crm.whatsapp.shop.ShopAssistant shopAssistant;
+
+    @PostMapping("/{orderCode}/customer-status")
+    @Operation(summary = "Store moves a WhatsApp customer order on: DISPATCHED or DELIVERED (the customer is told on WhatsApp)",
+            description = "Body: {\"step\": \"DISPATCHED\"}")
+    public ResponseEntity<?> customerStatus(
+            @AuthenticationPrincipal CustomUserDetails userDetails,
+            @PathVariable String orderCode,
+            @RequestBody Map<String, String> body) {
+        if (userDetails == null) {
+            return ResponseEntity.status(401).body(Map.of("status", "ERROR", "message", "Unauthorized"));
+        }
+        try {
+            String step = body == null ? null : body.get("step");
+            Order order = orderService.updateCustomerOrder(orderCode, getMerchantIdFromUser(userDetails), step);
+            try {
+                shopAssistant.notifyStep(order, step);
+            } catch (Exception e) {
+                logger.info("Customer WhatsApp update for {} not sent: {}", orderCode, e.getMessage());
+            }
+            return ResponseEntity.ok(Map.of("status", "SUCCESS",
+                    "message", "DELIVERED".equalsIgnoreCase(step) ? "Marked delivered" : "Marked dispatched",
+                    "data", mapToOrderResponseDTO(order)));
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().body(Map.of("status", "FAILURE", "message", e.getMessage()));
+        }
+    }
+
     @PostMapping("/{orderCode}/receive")
     @Operation(summary = "Merchant confirms stock receipt by entering order code from receipt")
     public ResponseEntity<?> receiveOrder(
@@ -504,13 +566,17 @@ public class OrderController {
             Page<Order> orderPage = orderService.getOrdersByDistributorAndStatus(
                     merchantId, status, paymentMode, effectiveStart, effectiveEnd, pageable);
 
+            // Distributor's own margin per order (wholesale price charged - unit cost in inventory)
+            Map<Long, OrderProfitService.Profit> profits = orderProfitService.profitFor(merchantId, orderPage.getContent());
             List<OrderResponseDTO> responseData = orderPage.getContent().stream()
-                    .map(this::mapToOrderResponseDTO)
+                    .map(o -> withProfit(mapToOrderResponseDTO(o), profits.get(o.getId())))
                     .toList();
 
             Map<String, Object> response = new LinkedHashMap<>();
             response.put("status", "SUCCESS");
             response.put("role", "DISTRIBUTOR");
+            response.put("pageMarginKes", responseData.stream().map(OrderResponseDTO::getMarginKes)
+                    .filter(java.util.Objects::nonNull).reduce(java.math.BigDecimal.ZERO, java.math.BigDecimal::add));
             response.put("filterStatus", status.name());
             response.put("filterPaymentMode", paymentMode != null ? paymentMode.name() : "ALL");
             response.put("startDate", effectiveStart.toString());
@@ -622,9 +688,37 @@ public class OrderController {
                 .paymentReference(order.getPaymentReference())
                 .merchant(mapMerchantSummary(order.getMerchant()))
                 .distributor(mapMerchantSummary(order.getDistributor()))
+                .projectedMargin(order.getProjectedMargin())
+                .marginCoverageRatio(order.getMarginCoverageRatio())
+                .marginDataComplete(order.isMarginDataComplete())   // or getMarginDataComplete()
+                .orderSource(order.getOrderSource() == null ? "DISTRIBUTOR" : order.getOrderSource().name())
+                .shopNote(order.getShopNote())
+                .cancelReason(order.getCancelReason())
+                .customerName(order.getCustomerName())
+                .deliveryAddress(order.getDeliveryAddress())
+                .cancelledAt(order.getCancelledAt())
                 .items(order.getItems() != null ?
                         order.getItems().stream().map(this::mapOrderItem).toList() : List.of())
                 .build();
+    }
+
+    /** Adds the distributor's margin to an order (distributor view only). */
+    private OrderResponseDTO withProfit(OrderResponseDTO dto, OrderProfitService.Profit p) {
+        if (p == null) return dto;
+        dto.setCostKes(p.costKes());
+        dto.setMarginKes(p.marginKes());
+        dto.setMarginPct(p.marginPct());
+        dto.setMarginComplete(p.marginComplete());
+        if (dto.getItems() != null) {
+            dto.getItems().forEach(i -> {
+                OrderProfitService.LineProfit lp = p.lines().get(i.getId());
+                if (lp != null) {
+                    i.setUnitCost(lp.unitCost());
+                    i.setLineMargin(lp.lineMargin());
+                }
+            });
+        }
+        return dto;
     }
 
     private MerchantSummaryDTO mapMerchantSummary(Merchant merchant) {
@@ -647,6 +741,8 @@ public class OrderController {
                 .quantity(item.getQuantity())
                 .wholesalePrice(item.getWholesalePrice())
                 .lineTotal(item.getLineTotal())
+                .retailUnitPrice(item.getRetailUnitPrice())
+                .itemMargin(item.getItemMargin())
                 .build();
     }
 

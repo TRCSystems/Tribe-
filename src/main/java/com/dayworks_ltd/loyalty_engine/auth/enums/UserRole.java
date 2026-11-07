@@ -96,6 +96,13 @@ public enum UserRole {
                     CAMPAIGN_GET_BY_ID,
                     CAMPAIGN_DELETE
             )
+    ),
+    /** Distributor's field sales rep (SFA app): places orders for assigned shops, sees the CRM call list. */
+    FIELD_REP(
+            Set.of(
+                    MERCHANT_GET_BY_ID,
+                    INVENTORY_GET_ALL
+            )
     );
 
     @Getter
