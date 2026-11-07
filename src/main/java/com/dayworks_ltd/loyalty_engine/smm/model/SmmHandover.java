@@ -22,7 +22,7 @@ import java.time.LocalDateTime;
 @AllArgsConstructor
 public class SmmHandover {
 
-    public enum Reason { COMPLAINT, NEGATIVE, HAGGLE, BULK, UNSURE, QUALITY_DOUBT, BUSINESS_LEAD }
+    public enum Reason { COMPLAINT, NEGATIVE, AFTER_SALES, HAGGLE, BULK, UNSURE, QUALITY_DOUBT, BUSINESS_LEAD, ADVICE, SET }
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)

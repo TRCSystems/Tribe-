@@ -26,6 +26,11 @@ public final class CommentReplyPlanner {
             Intent.SET, Intent.ADVICE, Intent.QUALITY_DOUBT, Intent.BUSINESS_LEAD);
     static final Set<String> BUYING_NAMES = BUYING.stream().map(Enum::name).collect(java.util.stream.Collectors.toUnmodifiableSet());
 
+    /** A buyer as the planner decides: the buyer flag, or any buying intent. */
+    public static boolean isBuyer(CommentReader.Reading r) {
+        return r != null && (r.buyer() || (r.intent() != null && BUYING.contains(r.intent())));
+    }
+
     /**
      * One sellable item: a product in one colour and size with its live stock, or a service (stock null: a salon
      * treatment, nail set, etc. that is booked rather than taken off a shelf).
@@ -201,7 +206,7 @@ public final class CommentReplyPlanner {
 
     private static CommentReader.Reading withoutNegative(CommentReader.Reading r) {
         return new CommentReader.Reading(r.intent(), r.buyer(), r.wantsWhatsApp(), r.productCode(), r.colour(), r.size(),
-                r.language(), r.confidence(), false);
+                r.language(), r.confidence(), false, r.criticism());
     }
 
     // ───────────────────────────── wording ─────────────────────────────

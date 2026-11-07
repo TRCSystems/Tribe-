@@ -71,15 +71,24 @@ public class CommentReader {
             String language,
             @JsonPropertyDescription("high = clear meaning; low = unsure what they want or which product")
             String confidence,
-            @JsonPropertyDescription("True for a bad comment the public should not see: a customer complaint (paid but nothing came, "
-                    + "wrong or poor item, rude service), accusing the seller of fraud or theft (wezi, conman, scam, matapeli), insults, "
-                    + "or mocking the seller's work. A fair question or mild doubt ('is it original?', 'does it last?') is not negative.")
-            boolean negative) {
+            @JsonPropertyDescription("True only for a HARMFUL comment the public should not see: a customer complaint (paid but nothing came, "
+                    + "wrong or poor item, rude service), accusing the seller of fraud, theft or bait (wezi, conman, scam, matapeli), insults, "
+                    + "or mocking that tells people not to buy. Polite or fair criticism is NOT negative: use criticism instead.")
+            boolean negative,
+            @JsonPropertyDescription("True for polite or fair criticism that stays visible: telling the seller how to do the work, asking them "
+                    + "to post prices or to answer, or a mild 'not for me' ('you need to post the price', 'make it straight', 'kama ziko hivo siji').")
+            boolean criticism) {
 
-        /** A reading without the bad-comment flag (most callers and tests). */
+        /** A reading without the bad-comment flags (most callers and tests). */
         public Reading(Intent intent, boolean buyer, boolean wantsWhatsApp, String productCode, String colour, String size,
                        String language, String confidence) {
-            this(intent, buyer, wantsWhatsApp, productCode, colour, size, language, confidence, false);
+            this(intent, buyer, wantsWhatsApp, productCode, colour, size, language, confidence, false, false);
+        }
+
+        /** A reading with the harmful flag only. */
+        public Reading(Intent intent, boolean buyer, boolean wantsWhatsApp, String productCode, String colour, String size,
+                       String language, String confidence, boolean negative) {
+            this(intent, buyer, wantsWhatsApp, productCode, colour, size, language, confidence, negative, false);
         }
     }
 
@@ -92,22 +101,29 @@ public class CommentReader {
         return claude.isConfigured();
     }
 
+    /** The reading, and whether the stronger model gave it (for the comment record and the exam). */
+    public record Result(Reading reading, boolean secondLook) {}
+
     public Reading read(String comment, List<PostProduct> products) {
+        return readComment(comment, products).reading();
+    }
+
+    public Result readComment(String comment, List<PostProduct> products) {
         String system = prompt(products), text = "Comment: " + plain(comment);
         Reading first = claude.readText(system, text, Reading.class);
         if (secondModel == null || secondModel.isBlank() || first == null
                 || !doubtful(String.valueOf(first.intent()), first.buyer(), first.confidence(), comment)) {
-            return first;
+            return new Result(first, false);
         }
         try {
             Reading second = claude.readText(system, text, Reading.class, secondModel);
-            if (second == null) return first;
+            if (second == null) return new Result(first, false);
             log.info("Comment re-read by {}: {} -> {}", secondModel, first.intent(), second.intent());
-            return second;
+            return new Result(second, true);
         } catch (Exception e) {
             // The first reading stands; a failed second look must never lose the comment
             log.warn("Second look by {} failed, keeping the first reading: {}", secondModel, e.getMessage());
-            return first;
+            return new Result(first, false);
         }
     }
 
@@ -155,7 +171,10 @@ public class CommentReader {
                 - Set: "complete attire", "the whole outfit", "ngapi zote", "set nzima", "3 in 1 price", "bila fimbo" (the set without one piece). buyer true.
                 A comment can ask several things; pick the strongest (COMPLAINT > AFTER_SALES > SET > READY_TO_BUY > BOOKING > VARIANT > AVAILABILITY > PRICE > LOCATION > ADVICE > QUALITY_DOUBT > BUSINESS_LEAD > CONTACT).
                 Emojis alone, "😍", "beautiful", "nice", "🔥", "iko sawa", "safi", "poa", flirting or jokes about the model ("why do you look like a queen", "you're pretty, where are you?", "naeza pata uyu mrembo") are COMPLIMENT, buyer false. Tagging a friend with no question is OTHER.
-                Bad comments: set negative true for a customer complaint ("nililipa sijapata", "nimeletewa kitu mbaya"), accusing the seller of fraud or theft ("hawa ni wezi", "matapeli", "conman", "scam"), insults, or mocking the seller's work ("you suck at your job", "zimeharibika"). A complaint from someone who bought is COMPLAINT. Someone who has not bought but is criticising keeps their real intent (a would-be buyer annoyed that nobody answers is still PRICE or OTHER with buyer true). Fair questions or mild doubts ("is it original?", "inadumu?") are not negative.
+                Bad comments come in two kinds, judged by the harm the comment can do to the seller's sales:
+                - negative (HARMFUL, hidden from the public): a customer complaint ("nililipa sijapata", "nimeletewa kitu mbaya"), accusing the seller of fraud, theft or bait ("hawa ni wezi", "matapeli", "conman", "scam", "mnaambia offer imeisha"), insults ("you suck at your job", "it doesn't take a room temp IQ"), or mocking that tells others not to come ("half the people ain't gonna come to you").
+                - criticism (POLITE or FAIR, stays visible): telling the seller how to do the work ("you need to make it straight"), asking them to post prices or answer people ("you need to post the price", "why don't you reply"), "out of stock kama kawa", or a mild "not for me" ("kama ziko hivo kwenu siji", "mbona ziko kombo").
+                Never set both; when unsure which, it is criticism. A complaint from someone who bought is COMPLAINT. Someone who has not bought but is criticising keeps their real intent (a would-be buyer annoyed that nobody answers is still PRICE or OTHER with buyer true). Fair questions or mild doubts ("is it original?", "inadumu?") are not negative.
                 SPAM is anyone pulling people away to their own thing, not asking about this seller's product: "come to my private chat", "check your inbox / hidden messages", "write to me", "inbox me for an offer", links to other channels, groups or apps (betting, loans, forex, "earn 50k daily", "download ..."), "I won 17m on SportPesa" bait, bot-like messages in other alphabets asking to be answered (for example Russian "Написал Вам... Проверьте скрытые"), and religious quotes or long stories unrelated to the product. Spam is never CONTACT and never a buyer, even when it mentions chat, inbox or a number. The difference: a buyer wants the seller to contact them about this product ("inbox me the price", "nitumie namba"); a spammer invites people to their own chat, link or offer.
                 Colour words: kijani = green, nyekundu = red, nyeusi = black, nyeupe = white, bluu = blue, njano = yellow, pinki = pink.
                 Never guess a product code that isn't in the list below.

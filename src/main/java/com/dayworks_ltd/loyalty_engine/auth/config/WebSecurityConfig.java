@@ -81,6 +81,10 @@ public class WebSecurityConfig {
                         // WhatsApp: Meta calls these (signed / encrypted); setup is admin only
                         .requestMatchers("/api/v1/whatsapp/webhook", "/api/v1/whatsapp/flow").permitAll()
                         .requestMatchers("/api/v1/whatsapp/admin/**").hasRole(UserRole.ADMIN.name())
+                        // SokoReply: Meta calls the webhook (signed); Facebook sends the seller's browser to the callback
+                        // (trusts only the signed state); everything else is the shop's own setup
+                        .requestMatchers("/api/v1/smm/webhook", "/api/v1/smm/connect/callback").permitAll()
+                        .requestMatchers("/api/v1/smm/**").hasAnyRole(UserRole.ADMIN.name(), UserRole.MERCHANT.name())
                         .requestMatchers("/api/v1/invoices/**")
                           // ← Add this line
                         .hasAnyRole(UserRole.ADMIN.name(), UserRole.MERCHANT.name())

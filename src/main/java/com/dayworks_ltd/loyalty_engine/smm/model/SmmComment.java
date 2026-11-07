@@ -93,8 +93,11 @@ public class SmmComment {
     @Column(name = "wants_whatsapp")
     private Boolean wantsWhatsApp;
 
-    /** A complaint or a bad comment: hidden from the public and sent to the seller as urgent. */
+    /** A harmful comment (complaint, fraud accusation, insult): hidden from the public and sent to the seller as urgent. */
     private Boolean negative;
+
+    /** Polite or fair criticism: stays visible, counted in the morning summary so the seller sees how it lands. */
+    private Boolean criticism;
 
     @Column(name = "phone_found")
     private Boolean phoneFound;
@@ -126,6 +129,7 @@ public class SmmComment {
         buyer = r.buyer();
         wantsWhatsApp = r.wantsWhatsApp();
         negative = r.negative();
+        criticism = r.criticism();
         phoneFound = phone;
         secondLook = reReadByStrongerModel;
         state = State.READ;
