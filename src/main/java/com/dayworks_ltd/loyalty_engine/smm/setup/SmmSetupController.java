@@ -5,7 +5,9 @@ import com.dayworks_ltd.loyalty_engine.crm.whatsapp.WhatsAppCloudClient;
 import com.dayworks_ltd.loyalty_engine.crm.whatsapp.WhatsAppProperties;
 import com.dayworks_ltd.loyalty_engine.inventory.models.Inventory;
 import com.dayworks_ltd.loyalty_engine.inventory.repositories.InventoryRepository;
+import com.dayworks_ltd.loyalty_engine.orders.repositories.OrderRepository;
 import com.dayworks_ltd.loyalty_engine.smm.intake.SmmAlertService;
+import com.dayworks_ltd.loyalty_engine.smm.intake.SmmMessageTracker;
 import com.dayworks_ltd.loyalty_engine.smm.meta.MetaGraphClient;
 import com.dayworks_ltd.loyalty_engine.smm.model.*;
 import com.dayworks_ltd.loyalty_engine.smm.repository.*;
@@ -43,6 +45,7 @@ public class SmmSetupController {
     private final SmmHandoverRepository handovers;
     private final SmmLeadRepository leads;
     private final InventoryRepository inventory;
+    private final OrderRepository orders;
     private final MetaGraphClient graph;
     private final WhatsAppCloudClient whatsapp;
     private final WhatsAppProperties whatsappProps;
@@ -318,13 +321,16 @@ public class SmmSetupController {
     @Operation(summary = "Comments received, newest first, with what the agents understood and did")
     public ResponseEntity<?> comments(@AuthenticationPrincipal CustomUserDetails user,
                                       @RequestParam(required = false) String postId,
+                                      @RequestParam(required = false) String intent,
+                                      @RequestParam(required = false) String show,
                                       @RequestParam(defaultValue = "0") int page,
                                       @RequestParam(defaultValue = "50") int size) {
         return withMerchant(user, (m, u) -> {
             PageRequest pr = PageRequest.of(Math.max(page, 0), Math.min(Math.max(size, 1), 200));
-            var list = postId == null || postId.isBlank()
-                    ? comments.findByMerchantIdOrderByReceivedAtDesc(m, pr)
-                    : comments.findByMerchantIdAndPostIdOrderByReceivedAtDesc(m, postId, pr);
+            // show: buyers | not-buyers | harmful (anything else = all)
+            Boolean buyer = "buyers".equals(show) ? Boolean.TRUE : "not-buyers".equals(show) ? Boolean.FALSE : null;
+            Boolean negative = "harmful".equals(show) ? Boolean.TRUE : null;
+            var list = comments.search(m, blankToNull(postId), blankToNull(intent), buyer, negative, pr);
             List<Map<String, Object>> rows = list.getContent().stream().map(c -> {
                 Map<String, Object> r = new LinkedHashMap<>();
                 r.put("comment", c);
@@ -336,13 +342,33 @@ public class SmmSetupController {
         });
     }
 
+    @GetMapping("/comments/posts")
+    @Operation(summary = "Posts that have comments (for the filter), newest activity first")
+    public ResponseEntity<?> commentPosts(@AuthenticationPrincipal CustomUserDetails user) {
+        return withMerchant(user, (m, u) -> ok("Posts", comments.postsWithComments(m).stream()
+                .map(r -> Map.of("postId", r[0], "comments", r[1])).toList()));
+    }
+
     @GetMapping("/leads")
-    @Operation(summary = "Buyers from comments, most recent first")
+    @Operation(summary = "Buyers from comments, most recent first; filter by temperature (HOT, WARM, COLD) and post")
     public ResponseEntity<?> leads(@AuthenticationPrincipal CustomUserDetails user,
+                                   @RequestParam(required = false) String temperature,
+                                   @RequestParam(required = false) String postId,
                                    @RequestParam(defaultValue = "0") int page,
                                    @RequestParam(defaultValue = "50") int size) {
         return withMerchant(user, (m, u) -> {
-            var list = leads.findByMerchantIdOrderByLastContactAtDesc(m, PageRequest.of(Math.max(page, 0), Math.min(Math.max(size, 1), 200)));
+            PageRequest pr = PageRequest.of(Math.max(page, 0), Math.min(Math.max(size, 1), 200));
+            Lead.Temperature t;
+            try {
+                t = blankToNull(temperature) == null ? null : Lead.Temperature.valueOf(temperature.trim().toUpperCase(Locale.ROOT));
+            } catch (IllegalArgumentException e) {
+                return fail(HttpStatus.BAD_REQUEST, "temperature must be HOT, WARM or COLD");
+            }
+            String post = blankToNull(postId);
+            var list = post == null && t == null ? leads.findByMerchantIdOrderByLastContactAtDesc(m, pr)
+                    : post == null ? leads.findByMerchantIdAndTemperatureOrderByLastContactAtDesc(m, t, pr)
+                    : t == null ? leads.findByMerchantIdAndPostIdOrderByLastContactAtDesc(m, post, pr)
+                    : leads.findByMerchantIdAndPostIdAndTemperatureOrderByLastContactAtDesc(m, post, t, pr);
             return ok("Leads", Map.of("total", list.getTotalElements(), "page", list.getNumber(), "rows", list.getContent()));
         });
     }
@@ -372,6 +398,21 @@ public class SmmSetupController {
         }).orElseGet(() -> fail(HttpStatus.NOT_FOUND, "Not found")));
     }
 
+    @GetMapping("/reply-rate")
+    @Operation(summary = "Of buyers who got a private reply in the last N days, how many answered or ordered")
+    public ResponseEntity<?> replyRate(@AuthenticationPrincipal CustomUserDetails user, @RequestParam(defaultValue = "30") int days) {
+        return withMerchant(user, (m, u) -> {
+            var since = java.time.LocalDateTime.now(java.time.ZoneId.of("Africa/Nairobi")).minusDays(Math.min(Math.max(days, 1), 365));
+            List<SmmReply> sent = replies.findByMerchantIdAndKindAndStatusAndSentAtAfter(m, SmmReply.Kind.PRIVATE, SmmReply.Status.SENT, since);
+            // Orders carry Meta's comment ID; replies carry ours: map one to the other
+            Map<String, Long> byMetaId = new HashMap<>();
+            for (SmmReply r : sent) comments.findById(r.getCommentId()).ifPresent(c -> byMetaId.put(c.getCommentId(), c.getId()));
+            Set<Long> ordered = new HashSet<>();
+            if (!byMetaId.isEmpty()) orders.findSocialCommentIdsWithOrders(m, byMetaId.keySet()).forEach(id -> ordered.add(byMetaId.get(id)));
+            return ok("Reply rate", SmmMessageTracker.ReplyRate.of(sent, ordered));
+        });
+    }
+
     // ───────────────────────────── admin ─────────────────────────────
 
     @PostMapping("/admin/alert-template")
@@ -386,6 +427,10 @@ public class SmmSetupController {
     }
 
     // ───────────────────────────── helpers ─────────────────────────────
+
+    private static String blankToNull(String s) {
+        return s == null || s.isBlank() ? null : s.trim();
+    }
 
     private ResponseEntity<?> withMerchant(CustomUserDetails user, BiFunction<Long, Long, ResponseEntity<?>> action) {
         if (user == null || user.getMerchantId() == null) return fail(HttpStatus.BAD_REQUEST, "This user is not linked to any merchant");

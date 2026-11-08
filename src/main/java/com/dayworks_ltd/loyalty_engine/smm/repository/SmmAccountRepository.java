@@ -15,4 +15,7 @@ public interface SmmAccountRepository extends JpaRepository<SmmAccount, Long> {
 
     /** Accounts whose token the daily check should look at. */
     List<SmmAccount> findByStatus(SmmAccount.Status status);
+
+    /** Connected accounts whose last 30 days of comments have not been fetched yet. */
+    List<SmmAccount> findByStatusAndBackfilledAtIsNull(SmmAccount.Status status);
 }

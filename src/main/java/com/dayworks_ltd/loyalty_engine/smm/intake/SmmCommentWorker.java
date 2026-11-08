@@ -13,6 +13,7 @@ import com.dayworks_ltd.loyalty_engine.smm.model.*;
 import com.dayworks_ltd.loyalty_engine.smm.repository.*;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
@@ -44,10 +45,29 @@ public class SmmCommentWorker {
     private final MetaGraphClient graph;
     private final SmmAlertService alerts;
 
+    /** A viral post is handled at most this many comments a minute; other posts go ahead meanwhile. */
+    @Value("${smm.worker.per-post-per-minute:30}")
+    private int perPostPerMinute = 30;
+    private ViralGuard guard;
+
+    private synchronized ViralGuard guard() {
+        if (guard == null) guard = new ViralGuard(perPostPerMinute);
+        return guard;
+    }
+
+    /** At most this many comments per run (every 5 seconds). */
+    static final int PER_RUN = 50;
+
     @Scheduled(fixedDelayString = "${smm.worker-delay-ms:5000}", initialDelay = 20000)
     public void run() {
         if (!reader.isConfigured()) return;
-        for (SmmComment c : comments.findTop50ByStateOrderByReceivedAtAsc(SmmComment.State.NEW)) {
+        int handled = 0;
+        java.time.Instant now = java.time.Instant.now();
+        // Look further down the queue than one run handles, so a viral post at the front cannot block the others
+        for (SmmComment c : comments.queue(SmmComment.State.NEW, org.springframework.data.domain.PageRequest.of(0, PER_RUN * 4))) {
+            if (handled >= PER_RUN) break;
+            if (!guard().take(c.getPostId(), now)) continue; // this post has had its share this minute
+            handled++;
             try {
                 process(c);
             } catch (Exception e) {
@@ -64,9 +84,13 @@ public class SmmCommentWorker {
         boolean phone = CommentReplyPlanner.hasPhoneNumber(text);
         List<Item> items = itemsOnPost(c);
 
+        java.time.Instant now = java.time.Instant.now();
+        boolean repeat = guard().repeatFromSamePerson(c.getPostId(), c.getCommenterId(), text, now);
         CommentReader.Result result = ruleReading(text)
                 .map(r -> new CommentReader.Result(r, false))
+                .or(() -> guard().reuse(c.getPostId(), text, now)) // same words on this post: no second model call
                 .orElseGet(() -> reader.readComment(text, products(items)));
+        guard().remember(c.getPostId(), text, result, now);
         Reading reading = result.reading();
         c.applyReading(reading, phone, result.secondLook());
 
@@ -80,6 +104,9 @@ public class SmmCommentWorker {
         Duration age = c.getCommentCreatedAt() == null ? Duration.ZERO
                 : Duration.between(c.getCommentCreatedAt(), LocalDateTime.now(SmmIntakeService.NAIROBI));
         Plan plan = CommentReplyPlanner.plan(text, reading, items, shop(profile, account), age);
+        // Answered already (by the seller, or the same person said the same thing a moment ago): no second reply,
+        // but a phone number or a bad comment is still hidden
+        if (Boolean.TRUE.equals(c.getSellerAnswered()) || repeat) plan = alreadyAnswered(plan);
 
         // Replies: only logged for now (shadow mode, or sending not built yet)
         logReply(c, SmmReply.Kind.PUBLIC, plan.publicReply());
@@ -90,14 +117,27 @@ public class SmmCommentWorker {
 
         if (plan.handover()) {
             handovers.save(SmmHandover.builder().merchantId(c.getMerchantId()).commentId(c.getId())
-                    .reason(reason(reading)).urgent(plan.urgent()).build());
+                    .reason(reason(reading)).urgent(urgent(plan, c)).build());
             c.setState(SmmComment.State.HANDED_OVER);
         } else {
             c.setState(plan.publicReply() == null && plan.privateReply() == null && !plan.hideComment()
                     ? SmmComment.State.SKIPPED : SmmComment.State.PLANNED);
         }
         comments.save(c);
-        if (plan.urgent()) alerts.maybeAlert(c.getMerchantId());
+        if (urgent(plan, c)) alerts.maybeAlert(c.getMerchantId());
+    }
+
+    /**
+     * An old comment the seller already answered themselves: the agents don't answer it again or hand it over. They
+     * still read it (the buyer shows in Leads) and still hide it if it is bad or shows a phone number.
+     */
+    static Plan alreadyAnswered(Plan plan) {
+        return new Plan(null, null, plan.hideComment(), false, plan.demand(), false);
+    }
+
+    /** Old comments fetched after connecting are hidden if bad, but are not an emergency: no urgent alert. */
+    static boolean urgent(Plan plan, SmmComment c) {
+        return plan.urgent() && !Boolean.TRUE.equals(c.getBackfilled());
     }
 
     /** Free answers without the model: emoji-only praise. */
@@ -111,6 +151,9 @@ public class SmmCommentWorker {
     private void logReply(SmmComment c, SmmReply.Kind kind, String text) {
         if (text == null) return;
         replies.save(SmmReply.builder().merchantId(c.getMerchantId()).commentId(c.getId()).kind(kind).text(text)
+                // who a private reply goes to, so the buyer's answer can be matched to it (the sender updates it
+                // with the recipient ID Meta returns)
+                .recipientId(kind == SmmReply.Kind.PRIVATE ? c.getCommenterId() : null)
                 .model("planner").status(SmmReply.Status.LOGGED).build());
     }
 

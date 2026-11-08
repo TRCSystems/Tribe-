@@ -102,9 +102,36 @@ public class SmmComment {
     @Column(name = "phone_found")
     private Boolean phoneFound;
 
+    /** Town, area or country the commenter named (for delivery zones). */
+    @Column(length = 100)
+    private String place;
+
+    /** Every size they mentioned ("38, 3XL"). */
+    @Column(length = 100)
+    private String sizes;
+
+    /** Tagged a friend with a plan ("@jane twende"): two buyers, not one. */
+    @Column(name = "friend_tagged")
+    private Boolean friendTagged;
+
+    /** Another commenter answering someone else (a price, number or place): not a question for the seller. */
+    @Column(name = "answered_by_other")
+    private Boolean answeredByOther;
+
     /** Read again by the stronger model because the first reading was a doubtful "not a buyer". */
     @Column(name = "second_look")
     private Boolean secondLook;
+
+    /**
+     * Fetched after connecting (the last 30 days), not delivered live. Handled after live comments, and a bad one is
+     * hidden but does not send an urgent alert: it is old news, the seller sees it in the portal.
+     */
+    @Column(name = "backfilled")
+    private Boolean backfilled;
+
+    /** A backfilled comment the seller had already replied to: read and kept, but not answered again. */
+    @Column(name = "seller_answered")
+    private Boolean sellerAnswered;
 
     @Column(name = "lead_id")
     private Long leadId;
@@ -130,6 +157,10 @@ public class SmmComment {
         wantsWhatsApp = r.wantsWhatsApp();
         negative = r.negative();
         criticism = r.criticism();
+        place = r.place() == null || r.place().isBlank() ? null : r.place().length() > 100 ? r.place().substring(0, 100) : r.place();
+        sizes = r.sizes() == null || r.sizes().isBlank() ? null : r.sizes().length() > 100 ? r.sizes().substring(0, 100) : r.sizes();
+        friendTagged = r.friendTagged();
+        answeredByOther = r.answeredByOther();
         phoneFound = phone;
         secondLook = reReadByStrongerModel;
         state = State.READ;

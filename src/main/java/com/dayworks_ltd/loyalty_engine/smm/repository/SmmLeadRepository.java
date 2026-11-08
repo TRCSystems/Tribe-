@@ -12,4 +12,10 @@ public interface SmmLeadRepository extends JpaRepository<Lead, Long> {
     Optional<Lead> findFirstByMerchantIdAndSenderPsidAndPlatform(Long merchantId, String senderPsid, Lead.Platform platform);
 
     Page<Lead> findByMerchantIdOrderByLastContactAtDesc(Long merchantId, Pageable page);
+
+    Page<Lead> findByMerchantIdAndTemperatureOrderByLastContactAtDesc(Long merchantId, Lead.Temperature temperature, Pageable page);
+
+    Page<Lead> findByMerchantIdAndPostIdOrderByLastContactAtDesc(Long merchantId, String postId, Pageable page);
+
+    Page<Lead> findByMerchantIdAndPostIdAndTemperatureOrderByLastContactAtDesc(Long merchantId, String postId, Lead.Temperature temperature, Pageable page);
 }

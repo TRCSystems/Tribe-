@@ -77,7 +77,9 @@ public final class CommentReplyPlanner {
     public static Plan plan(String comment, CommentReader.Reading reading, List<Item> postItems, Shop shop, Duration commentAge) {
         boolean phone = hasPhoneNumber(comment);
         boolean canDm = commentAge == null || commentAge.compareTo(PRIVATE_REPLY_WINDOW) < 0;
-        boolean sw = reading == null || !"en".equalsIgnoreCase(reading.language());
+        // Swahili for Swahili or Sheng (and when unsure); English otherwise, including French, Portuguese and other
+        // languages until the Writer answers in the buyer's own language
+        boolean sw = reading == null || reading.language() == null || "sw".equalsIgnoreCase(reading.language());
         Intent intent = reading == null || reading.intent() == null ? Intent.OTHER : reading.intent();
         boolean buyer = reading != null && (reading.buyer() || BUYING.contains(intent));
 
@@ -122,7 +124,8 @@ public final class CommentReplyPlanner {
             // Wholesale, agents, resellers: thank them; the seller takes it from here
             String dm = sw ? "Habari! Asante kwa kutaka kufanya kazi nasi 💚 Mwenye duka atakuandikia kuhusu bei za jumla na jinsi ya kushirikiana."
                     : "Hi! Thanks for wanting to work with us 💚 The owner will message you about wholesale prices and how we can work together.";
-            return new Plan(publicFor(sw, canDm, phone, shop, null), canDm ? dm + whatsappLine(sw, shop, true) : null, phone, true, null);
+            String ask = sw ? "\n\nUko wapi, na ungehitaji vipande vingapi?" : "\n\nWhere are you based, and roughly how many pieces would you need?";
+            return new Plan(publicFor(sw, canDm, phone, shop, null), canDm ? dm + whatsappLine(sw, shop, true) + ask : null, phone, true, null);
         }
         if (intent == Intent.QUALITY_DOUBT || intent == Intent.ADVICE) {
             // Facts from the catalogue now; the judgement call (is it original, which one suits you) is the seller's
@@ -141,7 +144,8 @@ public final class CommentReplyPlanner {
             List<Item> pieces = postItems.stream().filter(Item::available).toList();
             String dm = (pieces.isEmpty() ? (sw ? "Habari! Vipande vya set hii vimeisha kwa sasa." : "Hi! The pieces of this set are sold out for now.")
                     : menu(sw, pieces)) + (sw ? "\n\nTutakuthibitishia bei ya set nzima sasa hivi." : "\n\nWe'll confirm the price for the full set right away.")
-                    + whatsappLine(sw, shop, wa);
+                    + whatsappLine(sw, shop, wa)
+                    + (sw ? "\n\nUngependa set nzima au kipande kimoja?" : "\n\nWould you like the full set or one piece?");
             return new Plan(publicFor(sw, canDm, phone, shop, null), canDm ? dm : null, phone, true, null);
         }
 
@@ -206,7 +210,7 @@ public final class CommentReplyPlanner {
 
     private static CommentReader.Reading withoutNegative(CommentReader.Reading r) {
         return new CommentReader.Reading(r.intent(), r.buyer(), r.wantsWhatsApp(), r.productCode(), r.colour(), r.size(),
-                r.language(), r.confidence(), false, r.criticism());
+                r.language(), r.confidence(), false, r.criticism(), r.place(), r.sizes(), r.friendTagged(), r.answeredByOther());
     }
 
     // ───────────────────────────── wording ─────────────────────────────
@@ -224,7 +228,7 @@ public final class CommentReplyPlanner {
                     .forEach(i -> menu.append("\n• ").append(i.name()).append(": KES ").append(kes(i.price())));
             if (shop.location() != null) menu.append(sw ? "\nTuko " : "\nWe're at ").append(shop.location());
             if (shop.orderLink() != null) menu.append(sw ? "\n\nBook hapa: " : "\n\nBook here: ").append(shop.orderLink());
-            return menu + whatsappLine(sw, shop, wa);
+            return menu + whatsappLine(sw, shop, wa) + closingQuestion(sw, items);
         }
         BigDecimal low = items.stream().map(Item::price).filter(Objects::nonNull).min(BigDecimal::compareTo).orElse(null);
         BigDecimal high = items.stream().map(Item::price).filter(Objects::nonNull).max(BigDecimal::compareTo).orElse(null);
@@ -242,7 +246,32 @@ public final class CommentReplyPlanner {
             sb.append(services ? (sw ? "\n\nBook hapa: " : "\n\nBook here: ")
                     : (sw ? "\n\nAgiza na ulipe kwa M-Pesa hapa: " : "\n\nOrder and pay by M-Pesa here: ")).append(shop.orderLink());
         }
-        return sb + whatsappLine(sw, shop, wa);
+        return sb + whatsappLine(sw, shop, wa) + closingQuestion(sw, items);
+    }
+
+    /**
+     * Meta allows one private reply per comment: the agent cannot follow up unless the buyer writes back. So the DM
+     * ends with one easy question that is natural to answer, and the answer opens a normal chat. It asks about what is
+     * actually open: which colour (when there is a choice), which size, which service and day, or where to deliver.
+     */
+    static String closingQuestion(boolean sw, List<Item> items) {
+        List<Item> open = items.stream().filter(Item::available).toList();
+        if (open.isEmpty()) open = items;
+        if (open.stream().allMatch(Item::service)) {
+            long names = open.stream().map(Item::name).filter(Objects::nonNull).distinct().count();
+            if (names > 1) {
+                return sw ? "\n\nUngependa kufanya ipi, na ungependa kuja lini?" : "\n\nWhich one would you like, and when would you like to come in?";
+            }
+            return sw ? "\n\nUngependa kuja siku gani?" : "\n\nWhich day would you like to come in?";
+        }
+        List<String> colours = open.stream().map(Item::colour).filter(Objects::nonNull).distinct().toList();
+        if (colours.size() > 1) {
+            String two = colours.get(0) + (sw ? " au " : " or ") + colours.get(1);
+            return sw ? "\n\nUngependa rangi gani, " + two + "?" : "\n\nWhich colour would you like, " + two + "?";
+        }
+        List<String> sizes = open.stream().map(Item::size).filter(Objects::nonNull).distinct().toList();
+        if (sizes.size() > 1) return sw ? "\n\nUnavaa size gani?" : "\n\nWhich size do you need?";
+        return sw ? "\n\nTukuletee? Uko wapi?" : "\n\nShall we deliver it? Which area are you in?";
     }
 
     private static String publicFor(boolean sw, boolean canDm, boolean phone, Shop shop, String lead) {

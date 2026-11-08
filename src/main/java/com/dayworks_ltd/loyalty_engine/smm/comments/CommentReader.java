@@ -67,7 +67,7 @@ public class CommentReader {
             String colour,
             @JsonPropertyDescription("Size asked for exactly as a size label (S, M, L, XL, 8, 10, 12, 42...); otherwise null")
             String size,
-            @JsonPropertyDescription("sw when the comment is mostly Swahili or Sheng, en when mostly English")
+            @JsonPropertyDescription("sw when the comment is mostly Swahili or Sheng, en when mostly English; fr French, pt Portuguese, ar Arabic, rw Kinyarwanda, rn Kirundi; other for any other language")
             String language,
             @JsonPropertyDescription("high = clear meaning; low = unsure what they want or which product")
             String confidence,
@@ -77,7 +77,21 @@ public class CommentReader {
             boolean negative,
             @JsonPropertyDescription("True for polite or fair criticism that stays visible: telling the seller how to do the work, asking them "
                     + "to post prices or to answer, or a mild 'not for me' ('you need to post the price', 'make it straight', 'kama ziko hivo siji').")
-            boolean criticism) {
+            boolean criticism,
+            @JsonPropertyDescription("Town, area or country the commenter names as where they are or want it delivered (Kisumu, Rongai, Tanzania, Lagos), as written; otherwise null")
+            String place,
+            @JsonPropertyDescription("Every size they mention, comma separated, as size labels ('38, 3XL'; '20kg, 24kg'); otherwise null")
+            String sizes,
+            @JsonPropertyDescription("True when they tag a friend together with a plan to buy or come ('@jane twende', '@john hii yako', 'tunaenda'); a bare tag is false")
+            boolean friendTagged,
+            @JsonPropertyDescription("True when the comment is someone other than the seller answering another commenter with a price, number, place or link")
+            boolean answeredByOther) {
+
+        /** A reading without the extra details (place, sizes, friend tagged, answered by another). */
+        public Reading(Intent intent, boolean buyer, boolean wantsWhatsApp, String productCode, String colour, String size,
+                       String language, String confidence, boolean negative, boolean criticism) {
+            this(intent, buyer, wantsWhatsApp, productCode, colour, size, language, confidence, negative, criticism, null, null, false, false);
+        }
 
         /** A reading without the bad-comment flags (most callers and tests). */
         public Reading(Intent intent, boolean buyer, boolean wantsWhatsApp, String productCode, String colour, String size,
@@ -152,12 +166,14 @@ public class CommentReader {
 
                 People write in English, Swahili or Sheng, often mixed, with spelling mistakes and no punctuation. Common buying phrases:
                 - Price: "shingapi", "ni ngapi", "bei gani", "how much", "hm", "price pls", "pm price".
-                - Location and delivery: "mko wapi", "mnapatikana wapi", "location", "where are you located", "where would I get", "which side are you selling", "mnadeliver", "free delivery ama", "itafika Kisumu?", "nilete kesho", "I am in Mozambique", or just a town or country name ("Kakamega", "Zambia"). A buyer telling you where they are wants to know if you deliver there.
+                - Location and delivery: "mko wapi", "mnapatikana wapi", "location", "where are you located", "which side are you selling", "mnadeliver", "free delivery ama", "itafika Kisumu?", "I am in Mozambique", or just a town or country name ("Kakamega", "Zambia"). A buyer telling you where they are wants to know if you deliver there. Put the town or country in place.
                 - Availability: "iko", "bado iko", "mnayo", "available?", "in stock?".
-                - Colour or size: "hio ya green", "nataka ya black", "size 12 iko", "XL?", "ya maroon", "sizes", "kuna short ones", "tutapata refu kidogo?", "mikono fupi".
+                - Colour or size (VARIANT): asking WHETHER a colour or size exists or WHICH ones there are: "iko ya green?", "size 12 iko", "XL?", "kuna ya maroon?", "sizes", "colours?", "kuna short ones", "tutapata refu kidogo?", "mikono fupi?".
+                - Wanting a specific colour or size is READY_TO_BUY, not VARIANT, with colour or size filled in: "nataka hio ya navy blue", "ntka hio brown", "naomba hiyo kijani", "nipe size 40", "I'll take the black one", "kuna size kubwa interested". The test: if they say they want it (nataka, naomba, nipe, I want, I'll take, interested), it is READY_TO_BUY; if they only ask whether it exists, it is VARIANT.
+                - Asking how to get one where they live is READY_TO_BUY with place filled in, not LOCATION: "where can I get one? I live in Puebla", "how can I get it in Tanzania", "nilete kesho", "niletee Rongai", "please where are you, I really need it". LOCATION is only asking where the shop is or naming a town without saying they want it.
                 - Short comments count: "Number" or "give us number" is CONTACT; "Link" on its own wants the order link (READY_TO_BUY); "Wa" on its own means WhatsApp me (CONTACT, wantsWhatsApp); "plug me", "connect us", "we need him/her" about the seller or the person in the video is CONTACT; asking the name of the shop or salon is LOCATION (they want to find it); "Sizes" is VARIANT; "hamuna ..." (don't you have ...) is AVAILABILITY; "how do you find it" or "how to find" means how do I get it (READY_TO_BUY); at a salon or nail tech "I want to learn" is BOOKING (a class).
                 When a short comment asks anything about the product, its price, size, stock, place, delivery or contact, it comes from a buyer: buyer true. Only praise, jokes, chat between other people, tags and spam are not buyers.
-                - Ready to buy: "naitaka", "nataka hii", "naweza pata", "I'll take it", "how do I order", "nitumie", "interested", "I'm interested", "I need it", "I need one", "need", "nahitaji", "naomba hiyo", "for me please", "napataje", "ntapata aje", "naeza pata aje", "how can I get it", and asking for it to be sent or delivered somewhere ("niko Kisumu nataka", "niko tz napataje", "send it to Nigeria").
+                - Ready to buy: "naitaka", "nataka hii", "I want", "I want one", "nataka dresses", "agtaka", "naweza pata", "I'll take it", "how do I order", "nitumie", "interested", "I'm interested", "I need it", "I need one", "need", "nahitaji", "naomba hiyo", "for me please", "napataje", "ntapata aje", "naeza pata aje", "how can I get it", and asking for it to be sent or delivered somewhere ("niko Kisumu nataka", "niko tz napataje", "send it to Nigeria").
                 - Booking a service: "naweza book", "appointment", "mko free Saturday", "naweza kuja kesho", "how much for gel/acrylics/braids", "mnafanya house calls".
                 - Contact: "whatsapp", "app number", "inbox", "dm", "nitumie namba", "your number", or a phone number left in the comment. Set wantsWhatsApp when they ask for WhatsApp or a number, or leave a number; if they also ask price or stock, the intent is that question, not CONTACT.
                 - "wp" is ambiguous. It is usually "wapi" (where): "iko wp", "mko wp", "uko wp", "duka liko wp", "wap iyo", "wpi" -> LOCATION, wantsWhatsApp false. It means WhatsApp only when it is about chatting or a number: "wp number", "nitumie wp", "inbox wp", "wp yako", "inapatikana wp" (can I get you on WhatsApp).
@@ -169,13 +185,16 @@ public class CommentReader {
                 - Advice: "budget 1,000-1,500 for 5 devices", "works on solar?", "size gani inanifaa", "which colour suits me", "what do you recommend". buyer true.
                 - After sales, from someone who already bought: "nimeorder jana bado", "nilibuy akakata", "can I exchange", "warranty", "return". Use COMPLAINT instead when they are angry or say they were cheated.
                 - Set: "complete attire", "the whole outfit", "ngapi zote", "set nzima", "3 in 1 price", "bila fimbo" (the set without one piece). buyer true.
+                Wanting it beats asking about it: "I need one, how much?", "how much, I really want one", "nataka, iko size 40?" are READY_TO_BUY (fill colour and size if given).
                 A comment can ask several things; pick the strongest (COMPLAINT > AFTER_SALES > SET > READY_TO_BUY > BOOKING > VARIANT > AVAILABILITY > PRICE > LOCATION > ADVICE > QUALITY_DOUBT > BUSINESS_LEAD > CONTACT).
-                Emojis alone, "😍", "beautiful", "nice", "🔥", "iko sawa", "safi", "poa", flirting or jokes about the model ("why do you look like a queen", "you're pretty, where are you?", "naeza pata uyu mrembo") are COMPLIMENT, buyer false. Tagging a friend with no question is OTHER.
+                Emojis alone, "😍", "beautiful", "nice", "🔥", "iko sawa", "safi", "poa", flirting or jokes about the model ("why do you look like a queen", "you're pretty, where are you?", "naeza pata uyu mrembo") are COMPLIMENT, buyer false. Short praise in any language or slang is COMPLIMENT too ("Mwismart", "kwa kweli kabisa", "Kebom", "I wish..."). Tagging a friend with no question is OTHER; set friendTagged when the tag comes with a plan ("@jane twende", "@john hii yako"). Thanking ("thank you", "@user thanks", "asante") is OTHER, not COMPLIMENT.
+                When a commenter answers someone else (another person giving the price, the location, a number or a link to a different commenter), set answeredByOther.
                 Bad comments come in two kinds, judged by the harm the comment can do to the seller's sales:
                 - negative (HARMFUL, hidden from the public): a customer complaint ("nililipa sijapata", "nimeletewa kitu mbaya"), accusing the seller of fraud, theft or bait ("hawa ni wezi", "matapeli", "conman", "scam", "mnaambia offer imeisha"), insults ("you suck at your job", "it doesn't take a room temp IQ"), or mocking that tells others not to come ("half the people ain't gonna come to you").
                 - criticism (POLITE or FAIR, stays visible): telling the seller how to do the work ("you need to make it straight"), asking them to post prices or answer people ("you need to post the price", "why don't you reply"), "out of stock kama kawa", or a mild "not for me" ("kama ziko hivo kwenu siji", "mbona ziko kombo").
                 Never set both; when unsure which, it is criticism. A complaint from someone who bought is COMPLAINT. Someone who has not bought but is criticising keeps their real intent (a would-be buyer annoyed that nobody answers is still PRICE or OTHER with buyer true). Fair questions or mild doubts ("is it original?", "inadumu?") are not negative.
-                SPAM is anyone pulling people away to their own thing, not asking about this seller's product: "come to my private chat", "check your inbox / hidden messages", "write to me", "inbox me for an offer", links to other channels, groups or apps (betting, loans, forex, "earn 50k daily", "download ..."), "I won 17m on SportPesa" bait, bot-like messages in other alphabets asking to be answered (for example Russian "Написал Вам... Проверьте скрытые"), and religious quotes or long stories unrelated to the product. Spam is never CONTACT and never a buyer, even when it mentions chat, inbox or a number. The difference: a buyer wants the seller to contact them about this product ("inbox me the price", "nitumie namba"); a spammer invites people to their own chat, link or offer.
+                SPAM is anyone pulling people away to their own thing, not asking about this seller's product: "come to my private chat", "check your inbox / hidden messages", "write to me", "inbox me for an offer", links to other channels, groups or apps (betting, loans, forex, "earn 50k daily", "download ..."), "I won 17m on SportPesa" bait, bot-like messages in other alphabets asking to be answered (for example Russian "Написал Вам... Проверьте скрытые"), and religious quotes or long stories that invite people somewhere or ask for money. Ordinary off-topic chat or debate between commenters (about life, religion, the news) with no link, no invitation and no offer is OTHER, not SPAM. Spam is never CONTACT and never a buyer, even when it mentions chat, inbox or a number. The difference: a buyer wants the seller to contact them about this product ("inbox me the price", "nitumie namba"); a spammer invites people to their own chat, link or offer.
+                Comments may also be in French, Portuguese, Arabic, Kinyarwanda or Kirundi when a Reel travels abroad: read them the same way and set language (fr, pt, ar, rw, rn; other for anything else). Examples: "combien" / "quanto custa" / "بكم" / "angahe" = PRICE; "je veux" / "eu quero" / "ndashaka" = READY_TO_BUY; "vous êtes où" / "onde fica" = LOCATION.
                 Colour words: kijani = green, nyekundu = red, nyeusi = black, nyeupe = white, bluu = blue, njano = yellow, pinki = pink.
                 Never guess a product code that isn't in the list below.
 

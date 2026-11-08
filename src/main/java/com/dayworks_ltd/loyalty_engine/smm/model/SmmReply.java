@@ -72,6 +72,32 @@ public class SmmReply {
     @Column(columnDefinition = "TEXT")
     private String error;
 
+    // ── did the buyer answer? (private replies only) ──
+    // Meta allows one private reply per comment; only the buyer's answer opens a chat. These fields give the reply rate.
+
+    /**
+     * Who the private reply went to: the commenter's ID at first; the sender replaces it with the recipient ID Meta
+     * returns, which is the ID the buyer's messages arrive with.
+     */
+    @Column(name = "recipient_id", length = 100)
+    private String recipientId;
+
+    /** When the buyer first wrote back after this private reply. Null = no answer (yet). */
+    @Column(name = "buyer_replied_at")
+    private LocalDateTime buyerRepliedAt;
+
+    /** The buyer's first answer, so the seller sees how the question landed. */
+    @Column(name = "buyer_reply_text", columnDefinition = "TEXT")
+    private String buyerReplyText;
+
+    /** The buyer's latest message: the chat window is open for 24 hours after it. */
+    @Column(name = "last_buyer_message_at")
+    private LocalDateTime lastBuyerMessageAt;
+
+    @Column(name = "buyer_message_count")
+    @Builder.Default
+    private Integer buyerMessageCount = 0;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private LocalDateTime createdAt;
 

@@ -60,6 +60,14 @@ public class SmmAccount {
     @Column(name = "last_webhook_at")
     private LocalDateTime lastWebhookAt;
 
+    /** When the last 30 days of comments were fetched after connecting. Null = still to do. */
+    @Column(name = "backfilled_at")
+    private LocalDateTime backfilledAt;
+
+    /** Why the backfill did not finish, if it failed. */
+    @Column(name = "backfill_error", length = 500)
+    private String backfillError;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private LocalDateTime createdAt;
 

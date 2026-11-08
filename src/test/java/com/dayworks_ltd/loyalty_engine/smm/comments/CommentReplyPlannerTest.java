@@ -329,4 +329,99 @@ class CommentReplyPlannerTest {
         assertTrue(p.privateReply().contains("https://wa.me/254700000000"));
         assertFalse(p.handover());
     }
+
+    // ── one private reply per comment: the DM ends with a question the buyer can answer ──
+
+    @Test
+    void everyBuyerDmEndsWithAQuestion() {
+        List<Item> outfit = List.of(new Item("TOP-1", "Linen top", "white", "M", new BigDecimal("1800"), 3),
+                new Item("PANTS-1", "Wide pants", "white", "M", new BigDecimal("2200"), 2));
+        List<Plan> plans = List.of(
+                CommentReplyPlanner.plan("Naweza pata hio dress ya green", reading(Intent.VARIANT, "green", null, "sw"), reel, SHOP, FRESH),
+                CommentReplyPlanner.plan("mko wapi", reading(Intent.LOCATION, null, null, "sw"), reel, SHOP, FRESH),
+                CommentReplyPlanner.plan("how much", reading(Intent.PRICE, null, null, "en"), reel, SHOP, FRESH),
+                CommentReplyPlanner.plan("nataka", reading(Intent.READY_TO_BUY, "black", "M", "sw"), reel, SHOP, FRESH),
+                CommentReplyPlanner.plan("shingapi", read(Intent.PRICE), GOWN, SHOP, FRESH),
+                CommentReplyPlanner.plan("price pls", read(Intent.PRICE), NAILS, SHOP, FRESH),
+                CommentReplyPlanner.plan("set ngapi", read(Intent.SET), outfit, SHOP, FRESH),
+                CommentReplyPlanner.plan("mnauza jumla?", read(Intent.BUSINESS_LEAD), GOWN, SHOP, FRESH),
+                CommentReplyPlanner.plan("wp", new Reading(Intent.CONTACT, true, true, "GOWN-1", null, null, "sw", "high"), GOWN, SHOP, FRESH));
+        for (Plan p : plans) {
+            assertNotNull(p.privateReply());
+            assertTrue(p.privateReply().trim().endsWith("?"), "the DM must invite a reply: " + p.privateReply());
+        }
+    }
+
+    @Test
+    void choiceOfColoursAsksWhichColour() {
+        Plan p = CommentReplyPlanner.plan("mko wapi", reading(Intent.LOCATION, null, null, "sw"), reel, SHOP, FRESH);
+        assertTrue(p.privateReply().endsWith("Ungependa rangi gani, green au black?"));
+
+        Plan en = CommentReplyPlanner.plan("where are you", reading(Intent.LOCATION, null, null, "en"), reel, SHOP, FRESH);
+        assertTrue(en.privateReply().endsWith("Which colour would you like, green or black?"));
+    }
+
+    @Test
+    void oneColourButSeveralSizesAsksTheSize() {
+        List<Item> shirt = List.of(new Item("SHIRT-1", "Linen shirt", "white", "M", new BigDecimal("1500"), 2),
+                new Item("SHIRT-1", "Linen shirt", "white", "L", new BigDecimal("1500"), 1),
+                new Item("SHIRT-1", "Linen shirt", "white", "XL", new BigDecimal("1500"), 0));
+        Plan p = CommentReplyPlanner.plan("bei?", read(Intent.PRICE), shirt, SHOP, FRESH);
+        assertTrue(p.privateReply().endsWith("Unavaa size gani?"));
+    }
+
+    @Test
+    void nothingLeftToChooseAsksWhereToDeliver() {
+        Plan p = CommentReplyPlanner.plan("Naweza pata hio dress ya green", reading(Intent.VARIANT, "green", null, "sw"), reel, SHOP, FRESH);
+        assertTrue(p.privateReply().endsWith("Tukuletee? Uko wapi?"), "only green M is in stock: next step is delivery");
+    }
+
+    @Test
+    void soldOutColoursAreNotOffered() {
+        List<Item> bag = List.of(new Item("BAG-1", "Tote", "red", null, new BigDecimal("2000"), 0),
+                new Item("BAG-1", "Tote", "brown", null, new BigDecimal("2000"), 3));
+        Plan p = CommentReplyPlanner.plan("price", new Reading(Intent.PRICE, true, false, "BAG-1", null, null, "en", "high"), bag, SHOP, FRESH);
+        assertFalse(p.privateReply().contains("red"));
+        assertTrue(p.privateReply().endsWith("Shall we deliver it? Which area are you in?"));
+    }
+
+    @Test
+    void salonAsksWhichServiceAndWhenOrJustWhichDay() {
+        Plan menu = CommentReplyPlanner.plan("price pls", read(Intent.PRICE), NAILS, SHOP, FRESH);
+        assertTrue(menu.privateReply().endsWith("Ungependa kufanya ipi, na ungependa kuja lini?"));
+
+        Plan gel = CommentReplyPlanner.plan("gel shingapi", new Reading(Intent.PRICE, true, false, "GEL", null, null, "sw", "high"), NAILS, SHOP, FRESH);
+        assertTrue(gel.privateReply().endsWith("Ungependa kuja siku gani?"));
+    }
+
+    @Test
+    void theQuestionComesAfterTheWhatsappLink() {
+        Plan p = CommentReplyPlanner.plan("wp", new Reading(Intent.PRICE, true, true, "GOWN-1", null, null, "sw", "high"), GOWN, SHOP, FRESH);
+        String dm = p.privateReply();
+        assertTrue(dm.indexOf("wa.me") < dm.lastIndexOf("Tukuletee"), "the question is the last thing they read");
+    }
+
+    @Test
+    void frenchAndOtherLanguagesGetEnglishNotSwahili() {
+        for (String lang : List.of("fr", "pt", "ar", "rw", "other")) {
+            Plan p = CommentReplyPlanner.plan("combien", reading(Intent.PRICE, null, null, lang), reel, SHOP, FRESH);
+            assertTrue(p.privateReply().startsWith("Hi!"), lang + " gets English until the Writer answers in their language");
+        }
+        Plan sw = CommentReplyPlanner.plan("bei", reading(Intent.PRICE, null, null, "sw"), reel, SHOP, FRESH);
+        assertTrue(sw.privateReply().startsWith("Habari!"));
+    }
+
+    @Test
+    void annoyedBuyerKeepsTheirDetailsWhenAnsweredPrivately() {
+        Reading r = new Reading(Intent.PRICE, true, false, "DRESS-1", null, null, "sw", "high", true, false, "Rongai", "M, L", true, false);
+        Plan p = CommentReplyPlanner.plan("mbona hamjibu bei", r, reel, SHOP, FRESH);
+        assertTrue(p.hideComment());
+        assertTrue(p.privateReply().contains("KES 3,500"));
+    }
+
+    @Test
+    void oldCommentsGetNoDmSoNoQuestionToTrack() {
+        Plan p = CommentReplyPlanner.plan("mko wapi", reading(Intent.LOCATION, null, null, "sw"), reel, SHOP, Duration.ofDays(8));
+        assertNull(p.privateReply());
+    }
 }

@@ -94,4 +94,25 @@ class CommentReaderTest {
         reader(claude, "").read("𝐇𝐨𝐰 𝐦𝐮𝐜𝐡", List.of());
         assertEquals(List.of("Comment: How much"), seen);
     }
+
+    @Test
+    void instructionsSeparateWantingAColourFromAskingAboutIt() {
+        String p = CommentReader.prompt(List.of());
+        assertTrue(p.contains("Wanting a specific colour or size is READY_TO_BUY"));
+        assertTrue(p.contains("nataka hio ya navy blue"));
+        assertFalse(p.contains("\"nataka ya black\", \"size 12 iko\""), "the old VARIANT example that caused the mix-up is gone");
+        assertTrue(p.contains("Asking how to get one where they live is READY_TO_BUY"));
+        assertTrue(p.contains("Thanking (\"thank you\""));
+        assertTrue(p.contains("is OTHER, not SPAM"));
+        assertTrue(p.contains("Kinyarwanda") && p.contains("combien"));
+    }
+
+    @Test
+    void theNewDetailsDefaultToEmpty() {
+        Reading old = new Reading(Intent.PRICE, true, false, null, null, null, "sw", "high");
+        assertNull(old.place());
+        assertNull(old.sizes());
+        assertFalse(old.friendTagged());
+        assertFalse(old.answeredByOther());
+    }
 }

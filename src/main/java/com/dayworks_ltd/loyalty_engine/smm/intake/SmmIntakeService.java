@@ -40,7 +40,7 @@ public class SmmIntakeService {
     public int ingest(Map<String, Object> payload) {
         int stored = 0;
         for (Incoming in : parse(payload)) {
-            if (save(in)) stored++;
+            if (save(in, false)) stored++;
         }
         return stored;
     }
@@ -76,13 +76,28 @@ public class SmmIntakeService {
         return out;
     }
 
-    private boolean save(Incoming in) {
+    /** Comments fetched after connecting (the last 30 days): stored like live ones, marked as backfilled. */
+    public int storeBackfill(List<Incoming> fetched, java.util.Set<String> answeredBySeller) {
+        int stored = 0;
+        for (Incoming in : fetched) {
+            if (save(in, true, answeredBySeller.contains(in.commentId()))) stored++;
+        }
+        return stored;
+    }
+
+    private boolean save(Incoming in, boolean backfill) {
+        return save(in, backfill, false);
+    }
+
+    private boolean save(Incoming in, boolean backfill, boolean sellerAnswered) {
         if (in.commentId() == null || in.accountId() == null) return false;
         Optional<SmmAccount> account = accounts.findByPlatformAndPageId(in.platform(), in.accountId());
         if (account.isEmpty() || account.get().getStatus() == SmmAccount.Status.DISCONNECTED) return false;
         SmmAccount a = account.get();
-        a.setLastWebhookAt(LocalDateTime.now(NAIROBI));
-        accounts.save(a);
+        if (!backfill) {
+            a.setLastWebhookAt(LocalDateTime.now(NAIROBI));
+            accounts.save(a);
+        }
         // The seller's own replies are theirs, not comments to answer
         if (in.accountId().equals(in.fromId())) return false;
         if (comments.existsByPlatformAndCommentId(in.platform(), in.commentId())) return false;
@@ -91,7 +106,7 @@ public class SmmIntakeService {
                     .merchantId(a.getMerchantId()).accountId(a.getId()).platform(in.platform())
                     .commentId(in.commentId()).postId(in.postId()).parentCommentId(in.parentId())
                     .commenterId(in.fromId()).commenterName(in.fromName()).text(in.text())
-                    .commentCreatedAt(in.createdAt()).receivedAt(LocalDateTime.now(NAIROBI))
+                    .commentCreatedAt(in.createdAt()).receivedAt(LocalDateTime.now(NAIROBI)).backfilled(backfill).sellerAnswered(sellerAnswered ? Boolean.TRUE : null)
                     .build());
             return true;
         } catch (DataIntegrityViolationException e) {

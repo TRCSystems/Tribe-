@@ -71,4 +71,8 @@ public interface OrderRepository extends JpaRepository<Order, Long> {
     WHERE o.merchant.businessType = 'LIQUOR'
     """)
     List<Long> findDistinctMerchantIds();
+
+    /** SokoReply reply rate: which of these comments led to an order (orders carry the comment they came from). */
+    @Query("SELECT DISTINCT o.socialCommentId FROM Order o WHERE o.merchant.id = :merchantId AND o.socialCommentId IN :commentIds")
+    List<String> findSocialCommentIdsWithOrders(@Param("merchantId") Long merchantId, @Param("commentIds") java.util.Collection<String> commentIds);
 }

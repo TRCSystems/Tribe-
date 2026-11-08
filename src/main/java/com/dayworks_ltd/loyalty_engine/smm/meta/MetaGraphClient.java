@@ -94,7 +94,7 @@ public class MetaGraphClient {
     /** Turns on comment webhooks for the Page (and, through it, its Instagram account). */
     public void subscribePage(String pageId, String pageToken) {
         post(graph(pageId + "/subscribed_apps")
-                .queryParam("subscribed_fields", "feed")
+                .queryParam("subscribed_fields", "feed,messages") // comments, and buyers answering our private replies
                 .queryParam("access_token", pageToken));
     }
 
@@ -157,6 +157,104 @@ public class MetaGraphClient {
 
     /** The seller's own past replies on their recent posts: samples of their voice for the Writer. */
     @SuppressWarnings("unchecked")
+    /** A comment fetched from the Graph API (backfill), shaped like the webhook gives it. */
+    public record FetchedComment(String id, String postId, String parentId, String fromId, String fromName, String text, String createdTime) {}
+
+    /** Facebook posts (Reels included) the Page published since a time, newest first. Post IDs look like the webhook's. */
+    @SuppressWarnings("unchecked")
+    public List<String> facebookPostIdsSince(String pageId, String pageToken, long sinceEpochSeconds, int max) {
+        Map<String, Object> res = get(graph(pageId + "/published_posts")
+                .queryParam("fields", "id,created_time")
+                .queryParam("since", sinceEpochSeconds)
+                .queryParam("limit", Math.min(max, 100))
+                .queryParam("access_token", pageToken));
+        return ((List<Map<String, Object>>) res.getOrDefault("data", List.of())).stream()
+                .map(p -> str(p.get("id"))).filter(Objects::nonNull).limit(max).toList();
+    }
+
+    /** Every comment and reply on one Facebook post (filter=stream), oldest first, up to max. */
+    @SuppressWarnings("unchecked")
+    public List<FetchedComment> facebookComments(String postId, String pageToken, int max) {
+        List<FetchedComment> out = new ArrayList<>();
+        String after = null;
+        do {
+            UriComponentsBuilder b = graph(postId + "/comments")
+                    .queryParam("filter", "stream").queryParam("order", "chronological")
+                    .queryParam("fields", "id,message,created_time,from{id,name},parent{id}")
+                    .queryParam("limit", 100).queryParam("access_token", pageToken);
+            if (after != null) b.queryParam("after", after);
+            Map<String, Object> res = get(b);
+            for (Map<String, Object> c : (List<Map<String, Object>>) res.getOrDefault("data", List.of())) {
+                Map<String, Object> from = c.get("from") instanceof Map<?, ?> f ? (Map<String, Object>) f : Map.of();
+                Map<String, Object> parent = c.get("parent") instanceof Map<?, ?> p ? (Map<String, Object>) p : Map.of();
+                out.add(new FetchedComment(str(c.get("id")), postId, str(parent.get("id")), str(from.get("id")), str(from.get("name")),
+                        str(c.get("message")), str(c.get("created_time"))));
+            }
+            after = nextCursor(res);
+        } while (after != null && out.size() < max);
+        return out.size() > max ? out.subList(0, max) : out;
+    }
+
+    /** Instagram posts and Reels since a time, newest first. */
+    @SuppressWarnings("unchecked")
+    public List<String> instagramMediaIdsSince(String instagramId, String pageToken, java.time.Instant since, int max) {
+        Map<String, Object> res = get(graph(instagramId + "/media")
+                .queryParam("fields", "id,timestamp")
+                .queryParam("limit", Math.min(max, 100))
+                .queryParam("access_token", pageToken));
+        List<String> ids = new ArrayList<>();
+        for (Map<String, Object> m : (List<Map<String, Object>>) res.getOrDefault("data", List.of())) {
+            java.time.Instant at = instant(str(m.get("timestamp")));
+            if (at != null && at.isBefore(since)) break; // newest first: the rest are older
+            if (m.get("id") != null) ids.add(str(m.get("id")));
+            if (ids.size() >= max) break;
+        }
+        return ids;
+    }
+
+    /** Comments on one Instagram post, with their replies, up to max. */
+    @SuppressWarnings("unchecked")
+    public List<FetchedComment> instagramComments(String mediaId, String pageToken, int max) {
+        List<FetchedComment> out = new ArrayList<>();
+        String after = null;
+        do {
+            UriComponentsBuilder b = graph(mediaId + "/comments")
+                    .queryParam("fields", "id,text,timestamp,from{id,username},username,replies{id,text,timestamp,from{id,username},username}")
+                    .queryParam("limit", 50).queryParam("access_token", pageToken);
+            if (after != null) b.queryParam("after", after);
+            Map<String, Object> res = get(b);
+            for (Map<String, Object> c : (List<Map<String, Object>>) res.getOrDefault("data", List.of())) {
+                out.add(instagramComment(c, mediaId, null));
+                for (Map<String, Object> r : dataOf(c.get("replies"))) out.add(instagramComment(r, mediaId, str(c.get("id"))));
+            }
+            after = nextCursor(res);
+        } while (after != null && out.size() < max);
+        return out.size() > max ? out.subList(0, max) : out;
+    }
+
+    @SuppressWarnings("unchecked")
+    private static FetchedComment instagramComment(Map<String, Object> c, String mediaId, String parentId) {
+        Map<String, Object> from = c.get("from") instanceof Map<?, ?> f ? (Map<String, Object>) f : Map.of();
+        String name = from.get("username") != null ? str(from.get("username")) : str(c.get("username"));
+        return new FetchedComment(str(c.get("id")), mediaId, parentId, str(from.get("id")), name, str(c.get("text")), str(c.get("timestamp")));
+    }
+
+    @SuppressWarnings("unchecked")
+    private static String nextCursor(Map<String, Object> res) {
+        if (!(res.get("paging") instanceof Map<?, ?> paging) || paging.get("next") == null) return null;
+        return paging.get("cursors") instanceof Map<?, ?> cursors ? str(((Map<String, Object>) cursors).get("after")) : null;
+    }
+
+    /** Graph times: "2026-11-08T10:15:30+0000". */
+    public static java.time.Instant instant(String t) {
+        if (t == null || t.isBlank()) return null;
+        try {
+            return java.time.OffsetDateTime.parse(t.replaceAll("([+-]\\d{2})(\\d{2})$", "$1:$2")).toInstant();
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
     public List<String> ownReplies(String pageId, String pageToken, int max) {
         Map<String, Object> res = get(graph(pageId + "/published_posts")
                 .queryParam("fields", "comments.limit(50){from,message,comments.limit(20){from,message}}")

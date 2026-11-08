@@ -14,7 +14,7 @@ import org.springframework.web.bind.annotation.*;
 
 import java.util.Map;
 
-/** Facebook Page and Instagram comment webhooks from Meta. Stored at once; the worker reads them a few seconds later. */
+/** Facebook Page and Instagram comment and message webhooks from Meta. Stored at once; the worker reads them a few seconds later. */
 @Slf4j
 @RestController
 @RequestMapping("/api/v1/smm")
@@ -23,6 +23,7 @@ public class SmmWebhookController {
 
     private final SmmProperties props;
     private final SmmIntakeService intake;
+    private final SmmMessageTracker messages;
     private final ObjectMapper objectMapper;
 
     @GetMapping("/webhook")
@@ -37,7 +38,7 @@ public class SmmWebhookController {
     }
 
     @PostMapping("/webhook")
-    @Operation(summary = "New comments on connected Pages and Instagram accounts (from Meta)")
+    @Operation(summary = "New comments and buyer messages on connected Pages and Instagram accounts (from Meta)")
     public ResponseEntity<String> webhook(@RequestBody String rawBody,
                                           @RequestHeader(name = "X-Hub-Signature-256", required = false) String signature) {
         if (!FlowCrypto.validSignature(rawBody, signature, props.getAppSecret())) {
@@ -45,8 +46,12 @@ public class SmmWebhookController {
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body("Bad signature");
         }
         try {
-            int stored = intake.ingest(objectMapper.readValue(rawBody, new TypeReference<Map<String, Object>>() {}));
+            Map<String, Object> payload = objectMapper.readValue(rawBody, new TypeReference<Map<String, Object>>() {});
+            int stored = intake.ingest(payload);
             if (stored > 0) log.info("SokoReply webhook: {} new comment(s)", stored);
+            // Messenger and Instagram messages: did a buyer answer one of our private replies?
+            int answered = messages.track(payload);
+            if (answered > 0) log.info("SokoReply webhook: {} private reply(ies) answered", answered);
         } catch (Exception e) {
             log.error("SokoReply webhook could not be stored", e);
         }
