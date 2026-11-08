@@ -25,4 +25,7 @@ public class CreateMerchantRequest {
     // user fields
     private Boolean isWholesaler = false;
     private String subscriptionPlan;
+
+    /** FULL (default) or SOKOREPLY, see MerchantPlan. */
+    private String plan;
 }

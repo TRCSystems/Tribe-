@@ -92,6 +92,7 @@ public class MerchantService {
         merchant.setTillNumber(request.getTillNumber());
         merchant.setBusinessType(request.getBusinessType());
         merchant.setBusinessPhone(request.getBusinessPhone());
+        merchant.setPlan(MerchantPlan.parse(request.getPlan()));
 
         Merchant saved = merchantRepository.save(merchant);
 
@@ -140,6 +141,9 @@ public class MerchantService {
             existing.setLocation(updatedMerchant.getLocation());
             existing.setBusinessType(updatedMerchant.getBusinessType());
             existing.setTillNumber(updatedMerchant.getTillNumber());
+            if (updatedMerchant.getPlan() != null) {
+                existing.setPlan(updatedMerchant.getPlan());
+            }
             return merchantRepository.save(existing);
         }).orElseThrow(() -> new IllegalArgumentException("Merchant not found"));
     }

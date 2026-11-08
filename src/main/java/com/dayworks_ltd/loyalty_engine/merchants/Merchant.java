@@ -96,6 +96,11 @@ public class Merchant {
     @JoinColumn(name = "distributor_id")
     private Merchant distributor;
 
+    /** What the merchant bought; null (every merchant from before plans) means FULL. See {@link MerchantPlan}. */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "plan", length = 20)
+    private MerchantPlan plan;
+
 
 
 

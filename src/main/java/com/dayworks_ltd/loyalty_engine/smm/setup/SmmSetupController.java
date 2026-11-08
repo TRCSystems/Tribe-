@@ -5,6 +5,8 @@ import com.dayworks_ltd.loyalty_engine.crm.whatsapp.WhatsAppCloudClient;
 import com.dayworks_ltd.loyalty_engine.crm.whatsapp.WhatsAppProperties;
 import com.dayworks_ltd.loyalty_engine.inventory.models.Inventory;
 import com.dayworks_ltd.loyalty_engine.inventory.repositories.InventoryRepository;
+import com.dayworks_ltd.loyalty_engine.inventory.services.StockAuditRecorder;
+import com.dayworks_ltd.loyalty_engine.merchants.MerchantPlan;
 import com.dayworks_ltd.loyalty_engine.orders.repositories.OrderRepository;
 import com.dayworks_ltd.loyalty_engine.smm.intake.SmmAlertService;
 import com.dayworks_ltd.loyalty_engine.smm.intake.SmmMessageTracker;
@@ -45,6 +47,7 @@ public class SmmSetupController {
     private final SmmHandoverRepository handovers;
     private final SmmLeadRepository leads;
     private final InventoryRepository inventory;
+    private final StockAuditRecorder stockAudit;
     private final OrderRepository orders;
     private final MetaGraphClient graph;
     private final WhatsAppCloudClient whatsapp;
@@ -189,10 +192,74 @@ public class SmmSetupController {
                 .sorted(Comparator.comparing(i -> String.valueOf(i.getItemName()))).map(SmmSetupController::item).toList()));
     }
 
+    @PostMapping("/setup/catalogue")
+    @Operation(summary = "Add a product (SokoReply-only plan; shop-system merchants add products in Inventory)")
+    public ResponseEntity<?> addItem(@AuthenticationPrincipal CustomUserDetails user, @RequestBody Map<String, Object> body) {
+        return withMerchant(user, (m, u) -> {
+            if (!ownsCatalogue(user)) return fail(HttpStatus.FORBIDDEN, "Add products on the Inventory page");
+            String name = text(body, "itemName", 120);
+            if (name == null) return fail(HttpStatus.BAD_REQUEST, "Give the product a name");
+            BigDecimal price = money(body.get("unitPrice"));
+            if (price == null) return fail(HttpStatus.BAD_REQUEST, "Give the product a price");
+            boolean service = "SERVICE".equals(body.get("itemType"));
+            Integer stock = service ? Integer.valueOf(0) : count(body.get("availableStock"));
+            if (stock == null) return fail(HttpStatus.BAD_REQUEST, "Stock must be a whole number, 0 or more");
+            String colour = lower(text(body, "colour", 40));
+            String size = upper(text(body, "size", 20));
+            Set<String> known = itemCodes(m);
+            String code = newItemCode(m, name, colour, size);
+            if (known.contains(code)) return fail(HttpStatus.CONFLICT, "This product is already in your catalogue; change its stock instead");
+            String parent = text(body, "parentCode", 100);
+            if (parent != null && !known.contains(parent)) {
+                return fail(HttpStatus.BAD_REQUEST, "Parent product must be another product in your catalogue");
+            }
+            Inventory i = new Inventory();
+            i.setMerchantId(String.valueOf(m));
+            i.setItemName(name);
+            i.setItemCode(code);
+            i.setUnitPrice(price);
+            i.setStartingStock(stock);
+            i.setAvailableStock(stock);
+            i.setClosingStock(stock);
+            i.setItemType(service ? Inventory.ItemType.SERVICE : Inventory.ItemType.GOOD);
+            i.setColour(colour);
+            i.setSize(size);
+            i.setParentCode(parent);
+            Inventory saved = inventory.save(i);
+            stockAudit.record(saved, StockAuditRecorder.NEW_ITEM, 0, stock, null, String.valueOf(u), "Added in SokoReply");
+            return ok("Added", item(saved));
+        });
+    }
+
     @PutMapping("/setup/catalogue/{id}")
-    @Operation(summary = "Set a product's type (GOOD/SERVICE), colour, size and parent product code")
+    @Operation(summary = "Set a product's type (GOOD/SERVICE), colour, size and parent product code; "
+            + "on the SokoReply-only plan also its name, price and stock")
     public ResponseEntity<?> saveItem(@AuthenticationPrincipal CustomUserDetails user, @PathVariable Long id, @RequestBody Map<String, Object> body) {
         return withMerchant(user, (m, u) -> inventory.findByIdAndMerchantId(id, String.valueOf(m)).<ResponseEntity<?>>map(i -> {
+            boolean shopFields = body.containsKey("itemName") || body.containsKey("unitPrice") || body.containsKey("availableStock");
+            if (shopFields && !ownsCatalogue(user)) {
+                return fail(HttpStatus.FORBIDDEN, "Change names, prices and stock on the Inventory page");
+            }
+            if (body.containsKey("itemName")) {
+                String name = text(body, "itemName", 120);
+                if (name == null) return fail(HttpStatus.BAD_REQUEST, "Give the product a name");
+                i.setItemName(name);
+            }
+            if (body.containsKey("unitPrice")) {
+                BigDecimal price = money(body.get("unitPrice"));
+                if (price == null) return fail(HttpStatus.BAD_REQUEST, "Give the product a price");
+                i.setUnitPrice(price);
+            }
+            if (body.containsKey("availableStock") && !i.isService()) {
+                Integer stock = count(body.get("availableStock"));
+                if (stock == null) return fail(HttpStatus.BAD_REQUEST, "Stock must be a whole number, 0 or more");
+                int before = i.getAvailableStock() == null ? 0 : i.getAvailableStock();
+                i.setAvailableStock(stock);
+                i.setClosingStock(stock);
+                i.syncTotals();
+                stockAudit.record(i, StockAuditRecorder.MANUAL_CORRECTION, before, stock, null, String.valueOf(u),
+                        "Stock set by the seller in SokoReply");
+            }
             if (body.containsKey("itemType")) {
                 i.setItemType("SERVICE".equals(body.get("itemType")) ? Inventory.ItemType.SERVICE : Inventory.ItemType.GOOD);
             }
@@ -435,6 +502,30 @@ public class SmmSetupController {
     private ResponseEntity<?> withMerchant(CustomUserDetails user, BiFunction<Long, Long, ResponseEntity<?>> action) {
         if (user == null || user.getMerchantId() == null) return fail(HttpStatus.BAD_REQUEST, "This user is not linked to any merchant");
         return action.apply(user.getMerchantId(), user.getUserId());
+    }
+
+    /** Only SokoReply-only sellers keep their products here; shop-system merchants use Inventory (with its stock controls). */
+    public static boolean ownsCatalogue(CustomUserDetails user) {
+        return user != null && MerchantPlan.SOKOREPLY.name().equals(user.getPlan());
+    }
+
+    /** Same shape as Inventory's own codes (merchant-NAME), plus colour and size so each variant gets its own row. */
+    public static String newItemCode(Long merchantId, String name, String colour, String size) {
+        StringBuilder code = new StringBuilder(merchantId + "-" + squash(name));
+        if (colour != null) code.append('-').append(squash(colour));
+        if (size != null) code.append('-').append(squash(size));
+        return code.length() > 100 ? code.substring(0, 100) : code.toString();
+    }
+
+    private static String squash(String s) {
+        return s.replaceAll("[^\\p{L}\\p{N}]", "").toUpperCase(Locale.ROOT);
+    }
+
+    /** A whole number, 0 or more; null when missing or not a number. */
+    public static Integer count(Object v) {
+        Double d = number(v);
+        if (d == null || d < 0 || d != Math.floor(d) || d > Integer.MAX_VALUE) return null;
+        return d.intValue();
     }
 
     private Set<String> itemCodes(Long merchantId) {

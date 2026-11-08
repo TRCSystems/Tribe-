@@ -47,6 +47,11 @@ public class CustomUserDetails implements UserDetails {
         return user.getMerchant().getBusinessType();
     }
 
+    /** The merchant's plan (FULL or SOKOREPLY); null for users without a merchant (admins). */
+    public String getPlan() {
+        return user.getMerchant() == null ? null : com.dayworks_ltd.loyalty_engine.merchants.MerchantPlan.of(user.getMerchant()).name();
+    }
+
     public Boolean getIsWholesaler() {
         return user.getIsWholesaler();
     }

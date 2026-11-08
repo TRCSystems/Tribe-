@@ -50,6 +50,10 @@ public class JWTService {
             claims.put("businessType", businessType);
         }
         claims.put("isWholesaler", user.getIsWholesaler());
+        String plan = user.getPlan(); // null for admins
+        if (plan != null) {
+            claims.put("plan", plan);
+        }
         claims.put("tillNumber", user.getTillNumber());
         claims.put("businessPhone", user.getBusinessPhone());
         claims.put("location", user.getLocation());
