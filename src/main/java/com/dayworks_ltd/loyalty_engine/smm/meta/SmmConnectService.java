@@ -17,7 +17,9 @@ import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.HashSet;
 import java.util.Optional;
+import java.util.Set;
 
 /**
  * Connecting a seller's Facebook Pages and Instagram accounts: the login link, the callback (token exchange, storing
@@ -49,7 +51,31 @@ public class SmmConnectService {
         ConnectState.Parsed who = ConnectState.verify(state, props.getStateSecret(), Instant.now());
         String userToken = graph.longLivedUserToken(code);
         List<String> names = new ArrayList<>(), skipped = new ArrayList<>();
-        for (MetaGraphClient.ManagedPage page : graph.managedPages(userToken)) {
+        List<MetaGraphClient.ManagedPage> pages = new ArrayList<>(graph.managedPages(userToken));
+        // Pages picked in the Login for Business dialog may be missing from me/accounts: add them from the token's grants
+        try {
+            MetaGraphClient.Grants grants = graph.grants(userToken);
+            Set<String> have = new HashSet<>();
+            pages.forEach(p -> have.add(p.id()));
+            for (String pageId : grants.pageIds()) {
+                if (have.contains(pageId)) continue;
+                try {
+                    MetaGraphClient.ManagedPage p = graph.page(pageId, userToken);
+                    if (p.accessToken() != null) pages.add(p);
+                } catch (Exception e) {
+                    log.warn("Could not read granted Page {}: {}", pageId, MetaGraphClient.redact(e.getMessage()));
+                }
+            }
+            log.info("Merchant {} login granted {} permission(s) {} and {} Page(s) by choice; me/accounts listed {}",
+                    who.merchantId(), grants.scopes().size(), grants.scopes(), grants.pageIds().size(), have.size());
+        } catch (Exception e) {
+            log.warn("Could not read what the login granted: {}", MetaGraphClient.redact(e.getMessage()));
+        }
+        if (pages.isEmpty()) {
+            throw new IllegalArgumentException("Facebook did not share any Page. Connect again and, when Facebook asks, "
+                    + "choose your Page (and its Instagram account).");
+        }
+        for (MetaGraphClient.ManagedPage page : pages) {
             if (!save(who, SocialPlatform.FACEBOOK, page.id(), page.name(), page.accessToken(), skipped)) continue;
             names.add(page.name() + " (Facebook)");
             try {

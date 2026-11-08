@@ -91,6 +91,49 @@ public class MetaGraphClient {
         return pages;
     }
 
+    /** What the seller granted in the login dialog: permission names, and the Pages picked per permission. */
+    public record Grants(List<String> scopes, Set<String> pageIds) {}
+
+    /**
+     * Facebook Login for Business shares Pages per permission ("granular scopes"). Those Pages are not always in
+     * me/accounts (for example Pages owned by a business portfolio), so they are read from the token itself.
+     */
+    @SuppressWarnings("unchecked")
+    public Grants grants(String userToken) {
+        Map<String, Object> res = get(graph("debug_token")
+                .queryParam("input_token", userToken)
+                .queryParam("access_token", props.getAppId() + "|" + props.getAppSecret()));
+        return grantsFrom((Map<String, Object>) res.getOrDefault("data", Map.of()));
+    }
+
+    @SuppressWarnings("unchecked")
+    static Grants grantsFrom(Map<String, Object> data) {
+        List<String> scopes = new ArrayList<>();
+        if (data.get("scopes") instanceof List<?> l) l.forEach(s -> scopes.add(String.valueOf(s)));
+        Set<String> pageIds = new LinkedHashSet<>();
+        if (data.get("granular_scopes") instanceof List<?> granular) {
+            for (Object o : granular) {
+                if (!(o instanceof Map<?, ?> g)) continue;
+                String scope = String.valueOf(g.get("scope"));
+                if (scope.startsWith("pages_") && g.get("target_ids") instanceof List<?> ids) {
+                    ids.forEach(id -> pageIds.add(String.valueOf(id)));
+                }
+            }
+        }
+        return new Grants(scopes, pageIds);
+    }
+
+    /** One Page by id, with its Page token and linked Instagram account. */
+    @SuppressWarnings("unchecked")
+    public ManagedPage page(String pageId, String userToken) {
+        Map<String, Object> p = get(graph(pageId)
+                .queryParam("fields", "id,name,access_token,instagram_business_account{id,username}")
+                .queryParam("access_token", userToken));
+        Map<String, Object> ig = (Map<String, Object>) p.get("instagram_business_account");
+        return new ManagedPage(str(p.get("id")), str(p.get("name")), str(p.get("access_token")),
+                ig == null ? null : str(ig.get("id")), ig == null ? null : str(ig.get("username")));
+    }
+
     /** Turns on comment webhooks for the Page (and, through it, its Instagram account). */
     public void subscribePage(String pageId, String pageToken) {
         post(graph(pageId + "/subscribed_apps")

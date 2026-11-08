@@ -30,4 +30,19 @@ class MetaGraphUriTest {
         assertEquals("x?fb_exchange_token=REDACTED and code=REDACTED", MetaGraphClient.redact("x?fb_exchange_token=AAA and code=BBB"));
         assertNull(MetaGraphClient.redact(null));
     }
+
+    @Test
+    void pagesPickedInTheLoginDialogAreReadFromTheGrants() {
+        java.util.Map<String, Object> data = java.util.Map.of(
+                "scopes", java.util.List.of("pages_show_list", "pages_read_engagement", "instagram_basic"),
+                "granular_scopes", java.util.List.of(
+                        java.util.Map.of("scope", "pages_show_list", "target_ids", java.util.List.of("111", "222")),
+                        java.util.Map.of("scope", "pages_read_engagement", "target_ids", java.util.List.of("222")),
+                        java.util.Map.of("scope", "instagram_basic", "target_ids", java.util.List.of("17841")),
+                        java.util.Map.of("scope", "business_management")));
+        MetaGraphClient.Grants g = MetaGraphClient.grantsFrom(data);
+        assertEquals(java.util.List.of("111", "222"), java.util.List.copyOf(g.pageIds()), "Pages only, each once");
+        assertEquals(3, g.scopes().size());
+        assertTrue(MetaGraphClient.grantsFrom(java.util.Map.of()).pageIds().isEmpty());
+    }
 }
