@@ -56,7 +56,7 @@ public class SmmConnectController {
             } catch (IllegalArgumentException e) {
                 back.queryParam("error", e.getMessage());
             } catch (Exception e) {
-                log.error("Connecting Pages failed: {}", e.getMessage());
+                log.error("Connecting Pages failed: {}", MetaGraphClient.redact(e.getMessage()));
                 back.queryParam("error", "Connecting failed. Please try again.");
             }
         }

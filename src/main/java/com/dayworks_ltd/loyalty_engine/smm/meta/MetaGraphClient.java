@@ -299,15 +299,31 @@ public class MetaGraphClient {
 
     @SuppressWarnings("unchecked")
     private Map<String, Object> exchange(HttpMethod method, UriComponentsBuilder b) {
-        URI uri = b.encode().build().toUri();
+        URI uri = toUri(b);
         try {
             ResponseEntity<Map> res = restTemplate.exchange(uri, method, null, Map.class);
             return res.getBody() == null ? Map.of() : res.getBody();
         } catch (HttpStatusCodeException e) {
             // Meta's error text, never the URL (it carries the token)
             String body = e.getResponseBodyAsString();
-            throw new GraphException("Meta said " + e.getStatusCode().value() + ": " + (body.length() > 300 ? body.substring(0, 300) : body));
+            throw new GraphException("Meta said " + e.getStatusCode().value() + ": " + redact(body.length() > 300 ? body.substring(0, 300) : body));
+        } catch (RuntimeException e) {
+            // Network errors name the full URL, token included: keep only the kind of failure
+            throw new GraphException("Could not reach Meta (" + e.getClass().getSimpleName() + ")");
         }
+    }
+
+    /**
+     * Build, then encode: Graph field lists like {@code instagram_business_account{id,username}} contain braces,
+     * which encode-then-build would read as URI template variables and fail on.
+     */
+    static URI toUri(UriComponentsBuilder b) {
+        return b.build().encode().toUri();
+    }
+
+    /** Removes access tokens from any text that might be logged or shown. */
+    public static String redact(String text) {
+        return text == null ? null : text.replaceAll("(access_token|fb_exchange_token|client_secret|code)=[^&\\s\"']+", "$1=REDACTED");
     }
 
     private static String str(Object o) {
