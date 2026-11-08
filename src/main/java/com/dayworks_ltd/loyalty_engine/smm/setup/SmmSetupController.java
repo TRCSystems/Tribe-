@@ -6,7 +6,7 @@ import com.dayworks_ltd.loyalty_engine.crm.whatsapp.WhatsAppProperties;
 import com.dayworks_ltd.loyalty_engine.inventory.models.Inventory;
 import com.dayworks_ltd.loyalty_engine.inventory.repositories.InventoryRepository;
 import com.dayworks_ltd.loyalty_engine.inventory.services.StockAuditRecorder;
-import com.dayworks_ltd.loyalty_engine.merchants.MerchantPlan;
+import com.dayworks_ltd.loyalty_engine.merchants.MerchantModule;
 import com.dayworks_ltd.loyalty_engine.orders.repositories.OrderRepository;
 import com.dayworks_ltd.loyalty_engine.smm.intake.SmmAlertService;
 import com.dayworks_ltd.loyalty_engine.smm.intake.SmmMessageTracker;
@@ -504,9 +504,13 @@ public class SmmSetupController {
         return action.apply(user.getMerchantId(), user.getUserId());
     }
 
-    /** Only SokoReply-only sellers keep their products here; shop-system merchants use Inventory (with its stock controls). */
+    /**
+     * Merchants without the Inventory module keep their products here; those with it use Inventory
+     * (with its stock controls).
+     */
     public static boolean ownsCatalogue(CustomUserDetails user) {
-        return user != null && MerchantPlan.SOKOREPLY.name().equals(user.getPlan());
+        java.util.List<String> modules = user == null ? null : user.getModules();
+        return modules != null && modules.contains(MerchantModule.SOKOREPLY.name()) && !modules.contains(MerchantModule.INVENTORY.name());
     }
 
     /** Same shape as Inventory's own codes (merchant-NAME), plus colour and size so each variant gets its own row. */

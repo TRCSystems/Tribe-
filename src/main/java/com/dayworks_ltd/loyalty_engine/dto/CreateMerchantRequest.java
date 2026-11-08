@@ -26,6 +26,9 @@ public class CreateMerchantRequest {
     private Boolean isWholesaler = false;
     private String subscriptionPlan;
 
-    /** FULL (default) or SOKOREPLY, see MerchantPlan. */
+    /** FULL (default) or SOKOREPLY, see MerchantPlan. Ignored when modules are given. */
     private String plan;
+
+    /** Modules bought (POS, ORDERS, INVENTORY, CUSTOMERS, REPORTS, FINANCE, SOKOREPLY), see MerchantModule. */
+    private java.util.List<String> modules;
 }

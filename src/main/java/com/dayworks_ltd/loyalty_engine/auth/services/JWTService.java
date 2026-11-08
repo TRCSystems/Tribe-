@@ -54,6 +54,10 @@ public class JWTService {
         if (plan != null) {
             claims.put("plan", plan);
         }
+        java.util.List<String> modules = user.getModules(); // null for admins
+        if (modules != null) {
+            claims.put("modules", modules);
+        }
         claims.put("tillNumber", user.getTillNumber());
         claims.put("businessPhone", user.getBusinessPhone());
         claims.put("location", user.getLocation());

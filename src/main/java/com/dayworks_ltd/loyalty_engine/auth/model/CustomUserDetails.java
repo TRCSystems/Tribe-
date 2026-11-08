@@ -52,6 +52,12 @@ public class CustomUserDetails implements UserDetails {
         return user.getMerchant() == null ? null : com.dayworks_ltd.loyalty_engine.merchants.MerchantPlan.of(user.getMerchant()).name();
     }
 
+    /** The merchant's modules (POS, ORDERS, ..., SOKOREPLY); null for users without a merchant (admins). */
+    public java.util.List<String> getModules() {
+        if (user.getMerchant() == null) return null;
+        return com.dayworks_ltd.loyalty_engine.merchants.MerchantModule.of(user.getMerchant()).stream().map(Enum::name).toList();
+    }
+
     public Boolean getIsWholesaler() {
         return user.getIsWholesaler();
     }

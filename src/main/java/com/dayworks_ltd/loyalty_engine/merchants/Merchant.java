@@ -101,6 +101,10 @@ public class Merchant {
     @Column(name = "plan", length = 20)
     private MerchantPlan plan;
 
+    /** Modules chosen at onboarding, comma separated (see {@link MerchantModule}); null means "decided by plan". */
+    @Column(name = "modules", length = 200)
+    private String modules;
+
 
 
 

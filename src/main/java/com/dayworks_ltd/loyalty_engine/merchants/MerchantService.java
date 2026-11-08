@@ -93,6 +93,11 @@ public class MerchantService {
         merchant.setBusinessType(request.getBusinessType());
         merchant.setBusinessPhone(request.getBusinessPhone());
         merchant.setPlan(MerchantPlan.parse(request.getPlan()));
+        java.util.Set<MerchantModule> modules = MerchantModule.parse(request.getModules());
+        if (!modules.isEmpty()) {
+            merchant.setModules(MerchantModule.join(modules));
+            merchant.setPlan(MerchantModule.planFor(modules));
+        }
 
         Merchant saved = merchantRepository.save(merchant);
 
@@ -143,6 +148,11 @@ public class MerchantService {
             existing.setTillNumber(updatedMerchant.getTillNumber());
             if (updatedMerchant.getPlan() != null) {
                 existing.setPlan(updatedMerchant.getPlan());
+            }
+            java.util.Set<MerchantModule> modules = MerchantModule.parse(updatedMerchant.getModules());
+            if (!modules.isEmpty()) {
+                existing.setModules(MerchantModule.join(modules));
+                existing.setPlan(MerchantModule.planFor(modules));
             }
             return merchantRepository.save(existing);
         }).orElseThrow(() -> new IllegalArgumentException("Merchant not found"));
