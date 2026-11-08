@@ -71,6 +71,27 @@ public class SmmConnectService {
         } catch (Exception e) {
             log.warn("Could not read what the login granted: {}", MetaGraphClient.redact(e.getMessage()));
         }
+        // Still nothing: Pages run from a business portfolio (Meta Business Suite) are not on the personal profile
+        if (pages.isEmpty()) {
+            try {
+                List<String> ids = graph.businessPageIds(userToken);
+                int withToken = 0;
+                for (String pageId : ids) {
+                    try {
+                        MetaGraphClient.ManagedPage p = graph.page(pageId, userToken);
+                        if (p.accessToken() != null) {
+                            pages.add(p);
+                            withToken++;
+                        }
+                    } catch (Exception e) {
+                        log.warn("Could not read business Page {}: {}", pageId, MetaGraphClient.redact(e.getMessage()));
+                    }
+                }
+                log.info("Merchant {} business portfolios list {} Page(s); {} usable", who.merchantId(), ids.size(), withToken);
+            } catch (Exception e) {
+                log.warn("Could not read business portfolios: {}", MetaGraphClient.redact(e.getMessage()));
+            }
+        }
         if (pages.isEmpty()) {
             throw new IllegalArgumentException("Facebook did not share any Page. Connect again and, when Facebook asks, "
                     + "choose your Page (and its Instagram account).");

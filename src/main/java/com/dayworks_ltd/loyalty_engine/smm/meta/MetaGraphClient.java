@@ -123,6 +123,32 @@ public class MetaGraphClient {
         return new Grants(scopes, pageIds);
     }
 
+    /**
+     * Pages the person reaches through their business portfolios (Meta Business Suite), which me/accounts leaves out
+     * when they have no Page role on their personal profile. Needs business_management. Returns Page ids.
+     */
+    @SuppressWarnings("unchecked")
+    public List<String> businessPageIds(String userToken) {
+        List<String> ids = new ArrayList<>();
+        Map<String, Object> res = get(graph("me/businesses").queryParam("fields", "id").queryParam("limit", 50)
+                .queryParam("access_token", userToken));
+        for (Map<String, Object> b : (List<Map<String, Object>>) res.getOrDefault("data", List.of())) {
+            for (String edge : List.of("owned_pages", "client_pages")) {
+                try {
+                    Map<String, Object> pages = get(graph(b.get("id") + "/" + edge).queryParam("fields", "id")
+                            .queryParam("limit", 100).queryParam("access_token", userToken));
+                    for (Map<String, Object> pg : (List<Map<String, Object>>) pages.getOrDefault("data", List.of())) {
+                        String id = str(pg.get("id"));
+                        if (id != null && !ids.contains(id)) ids.add(id);
+                    }
+                } catch (GraphException e) {
+                    // no access to this edge for this portfolio; try the next
+                }
+            }
+        }
+        return ids;
+    }
+
     /** One Page by id, with its Page token and linked Instagram account. */
     @SuppressWarnings("unchecked")
     public ManagedPage page(String pageId, String userToken) {
