@@ -83,6 +83,14 @@ public class SmmSellerProfile {
     @Column(name = "shadow_mode", nullable = false)
     @Builder.Default
     private boolean shadowMode = true;
+    /**
+     * What the seller's next WhatsApp message answers, in the morning review: "FAQ:&lt;handover id&gt;" (a buyer's
+     * question) or "FIX:&lt;reply id&gt;" (a better wording for a reply). Null = nothing asked.
+     */
+    @Column(name = "awaiting", length = 40)
+    private String awaiting;
+    @Column(name = "awaiting_since")
+    private LocalDateTime awaitingSince;
 
     @Column(name = "created_at", nullable = false, updatable = false)
     private LocalDateTime createdAt;

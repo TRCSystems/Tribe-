@@ -8,6 +8,7 @@ import com.dayworks_ltd.loyalty_engine.smm.comments.CommentReader.Reading;
 import com.dayworks_ltd.loyalty_engine.smm.comments.CommentReplyPlanner;
 import com.dayworks_ltd.loyalty_engine.smm.comments.CommentReplyPlanner.Item;
 import com.dayworks_ltd.loyalty_engine.smm.comments.CommentReplyPlanner.Plan;
+import com.dayworks_ltd.loyalty_engine.smm.comments.ReplyWriter;
 import com.dayworks_ltd.loyalty_engine.smm.meta.MetaGraphClient;
 import com.dayworks_ltd.loyalty_engine.smm.model.*;
 import com.dayworks_ltd.loyalty_engine.smm.repository.*;
@@ -44,6 +45,9 @@ public class SmmCommentWorker {
     private final CommentReader reader;
     private final MetaGraphClient graph;
     private final SmmAlertService alerts;
+    private final ReplyWriter writer;
+    private final SmmFaqRepository faqs;
+    private final SmmLeadAlertService leadAlerts;
 
     /** A viral post is handled at most this many comments a minute; other posts go ahead meanwhile. */
     @Value("${smm.worker.per-post-per-minute:30}")
@@ -94,8 +98,11 @@ public class SmmCommentWorker {
         Reading reading = result.reading();
         c.applyReading(reading, phone, result.secondLook());
 
+        boolean newHotLead = false;
         if (Boolean.TRUE.equals(c.getBuyer()) || CommentReplyPlanner.isBuyer(reading)) {
-            c.setLeadId(upsertLead(c, reading, phone).getId());
+            Lead lead = upsertLead(c, reading, phone);
+            c.setLeadId(lead.getId());
+            newHotLead = Boolean.TRUE.equals(lead.getHotAlertPending());
         }
 
         SmmSellerProfile profile = profiles.findByMerchantId(c.getMerchantId())
@@ -108,10 +115,15 @@ public class SmmCommentWorker {
         // but a phone number or a bad comment is still hidden
         if (Boolean.TRUE.equals(c.getSellerAnswered()) || repeat) plan = alreadyAnswered(plan);
 
-        // Replies: queued for the sender when the seller is live, otherwise only logged
+        // Replies: queued for the sender when the seller is live, otherwise only logged. The Writer puts the
+        // planner's facts in the seller's voice (also in shadow mode, so the seller sees what would go out); old
+        // comments fetched at connect and paused sellers keep the planner's wording, nothing is sent for them anyway.
         SmmReply.Status status = sendable(profile, c) ? SmmReply.Status.PENDING : SmmReply.Status.LOGGED;
-        logReply(c, SmmReply.Kind.PUBLIC, plan.publicReply(), status);
-        logReply(c, SmmReply.Kind.PRIVATE, plan.privateReply(), status);
+        ReplyWriter.Result written = Boolean.TRUE.equals(c.getBackfilled()) || profile.isAgentsPaused()
+                ? new ReplyWriter.Result(plan.publicReply(), plan.privateReply(), null, "planner", null)
+                : writer.write(plan, writerContext(c, reading, profile, account));
+        logReply(c, SmmReply.Kind.PUBLIC, written.publicReply(), status, written);
+        logReply(c, SmmReply.Kind.PRIVATE, written.privateReply(), status, written);
 
         // Protective action, from day one and even when the seller paused the agents: hiding says nothing in their name
         if (plan.hideComment()) hide(c, account);
@@ -126,6 +138,31 @@ public class SmmCommentWorker {
         }
         comments.save(c);
         if (urgent(plan, c)) alerts.maybeAlert(c.getMerchantId());
+        if (newHotLead) leadAlerts.maybeAlert(c.getMerchantId());
+    }
+
+    /** What the Writer needs: the comment, the seller's voice and memory, and the latest replies so the angle varies. */
+    private ReplyWriter.Context writerContext(SmmComment c, Reading reading, SmmSellerProfile p, SmmAccount account) {
+        List<String> faq = faqs.findByMerchantId(c.getMerchantId()).stream()
+                .sorted(Comparator.comparing(SmmFaq::getId).reversed()).limit(40)
+                .map(f -> f.getQuestion().replace('\n', ' ') + " → " + f.getAnswer().replace('\n', ' ')).toList();
+        List<String> recent = new ArrayList<>();
+        for (SmmReply.Kind kind : List.of(SmmReply.Kind.PUBLIC, SmmReply.Kind.PRIVATE)) {
+            replies.findTop3ByMerchantIdAndKindOrderByIdDesc(c.getMerchantId(), kind).forEach(r -> {
+                if (r.getText() != null) recent.add(r.getText().length() > 160 ? r.getText().substring(0, 160) : r.getText());
+            });
+        }
+        CommentReplyPlanner.Shop shop = shop(p, account);
+        StringBuilder facts = new StringBuilder();
+        if (shop.location() != null) facts.append("Location: ").append(shop.location()).append(". ");
+        if (shop.landmark() != null) facts.append("Directions: ").append(shop.landmark()).append(". ");
+        if (shop.hours() != null) facts.append("Open: ").append(shop.hours()).append(". ");
+        if (shop.whatsappLink() != null) facts.append("WhatsApp: ").append(shop.whatsappLink()).append(". ");
+        ReplyWriter.Voice voice = new ReplyWriter.Voice(shop.name(), p.getTone(), p.getVoiceSamples(), p.getNoGoPhrases(),
+                faq, facts.isEmpty() ? null : facts.toString().trim());
+        String name = c.getCommenterName() == null ? null : c.getCommenterName().split("\\s+")[0];
+        return new ReplyWriter.Context(c.getMerchantId(), c.getText(), name, reading.language(),
+                String.valueOf(reading.intent()), voice, recent);
     }
 
     /**
@@ -157,13 +194,14 @@ public class SmmCommentWorker {
         return Optional.empty();
     }
 
-    private void logReply(SmmComment c, SmmReply.Kind kind, String text, SmmReply.Status status) {
+    private void logReply(SmmComment c, SmmReply.Kind kind, String text, SmmReply.Status status, ReplyWriter.Result written) {
         if (text == null) return;
         replies.save(SmmReply.builder().merchantId(c.getMerchantId()).commentId(c.getId()).kind(kind).text(text)
                 // who a private reply goes to, so the buyer's answer can be matched to it (the sender updates it
                 // with the recipient ID Meta returns)
                 .recipientId(kind == SmmReply.Kind.PRIVATE ? c.getCommenterId() : null)
-                .model("planner").status(status).build());
+                .model(written.model()).angle(written.angle()).checkerVerdict(written.verdict())
+                .status(status).build());
     }
 
     private void hide(SmmComment c, SmmAccount account) {
@@ -201,9 +239,29 @@ public class SmmCommentWorker {
         if (r.productCode() != null) lead.setInterestedItemCode(r.productCode());
         if (phone) lead.setPhoneNumber(firstPhone(c.getText()));
         Lead.Temperature t = temperature(r, phone);
+        boolean wasHot = lead.getTemperature() == Lead.Temperature.HOT;
         if (lead.getTemperature() == null || t.ordinal() > lead.getTemperature().ordinal()) lead.setTemperature(t);
+        // A buyer who just became hot on a live comment: the seller gets a WhatsApp to call them
+        if (!wasHot && lead.getTemperature() == Lead.Temperature.HOT && !Boolean.TRUE.equals(c.getBackfilled())) {
+            lead.setHotAlertPending(true);
+            lead.setHotWant(want(r));
+        }
         lead.setLastContactAt(LocalDateTime.now(SmmIntakeService.NAIROBI));
         return leads.save(lead);
+    }
+
+    /** What a hot buyer wants, for the seller's alert: "black, size 12", or the intent. */
+    static String want(Reading r) {
+        List<String> parts = new ArrayList<>();
+        if (r.colour() != null && !r.colour().isBlank()) parts.add(r.colour().trim());
+        if (r.size() != null && !r.size().isBlank()) parts.add("size " + r.size().trim());
+        if (r.place() != null && !r.place().isBlank()) parts.add("in " + r.place().trim());
+        if (!parts.isEmpty()) return String.join(", ", parts);
+        return switch (r.intent() == null ? Intent.OTHER : r.intent()) {
+            case BOOKING -> "to book";
+            case SET -> "the full set";
+            default -> "to buy";
+        };
     }
 
     /** HOT: wants it now or left a number; WARM: asked price, size, place...; COLD otherwise. */

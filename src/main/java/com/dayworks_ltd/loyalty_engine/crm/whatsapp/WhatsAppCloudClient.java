@@ -166,6 +166,36 @@ public class WhatsAppCloudClient {
         return send(to, "template", template);
     }
 
+    /**
+     * An approved template with quick-reply buttons: payloads.get(i) is what button i sends back when tapped (null =
+     * the button's own text). Template text parameters may not contain new lines, tabs or long runs of spaces.
+     */
+    public Sent sendTemplateWithReplies(String to, String templateName, List<String> bodyParams, List<String> payloads) {
+        List<Map<String, Object>> components = new ArrayList<>();
+        if (!bodyParams.isEmpty()) {
+            components.add(Map.of("type", "body", "parameters", bodyParams.stream()
+                    .map(p -> Map.of("type", "text", "text", templateText(p)))
+                    .toList()));
+        }
+        for (int i = 0; i < payloads.size(); i++) {
+            if (payloads.get(i) == null) continue;
+            components.add(Map.of("type", "button", "sub_type", "quick_reply", "index", String.valueOf(i),
+                    "parameters", List.of(Map.of("type", "payload", "payload", payloads.get(i)))));
+        }
+        Map<String, Object> template = new LinkedHashMap<>();
+        template.put("name", templateName);
+        template.put("language", Map.of("code", props.getTemplateLanguage()));
+        if (!components.isEmpty()) template.put("components", components);
+        return send(to, "template", template);
+    }
+
+    /** A template parameter: one line, no tabs, no runs of spaces, at most 300 characters, never empty. */
+    public static String templateText(String p) {
+        if (p == null || p.isBlank()) return "-";
+        String one = p.replaceAll("[\\r\\n\\t]+", " ").replaceAll(" {2,}", " ").trim();
+        return one.length() <= 300 ? one : one.substring(0, 299) + "…";
+    }
+
     // ───────────────────────────── setup (admin) ─────────────────────────────
 
     /** Registers the flow-encryption public key on the Tribe number. */

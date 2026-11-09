@@ -20,4 +20,8 @@ public interface SmmHandoverRepository extends JpaRepository<SmmHandover, Long> 
 
     /** At most one urgent alert an hour per seller, so a viral reel cannot flood them. */
     boolean existsByMerchantIdAndUrgentTrueAndAlertedAtAfter(Long merchantId, LocalDateTime since);
+
+    /** Questions waiting for the seller (not the urgent bad comments), oldest first. */
+    List<SmmHandover> findByMerchantIdAndUrgentFalseAndAnsweredAtIsNullAndCreatedAtAfterOrderByCreatedAtAsc(
+            Long merchantId, java.time.LocalDateTime since);
 }

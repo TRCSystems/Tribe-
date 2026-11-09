@@ -483,14 +483,21 @@ public class SmmSetupController {
     // ───────────────────────────── admin ─────────────────────────────
 
     @PostMapping("/admin/alert-template")
-    @Operation(summary = "Register the urgent bad-comment WhatsApp template with Meta (admin, once)")
+    @Operation(summary = "Register SokoReply's WhatsApp templates with Meta: bad comment, hot lead, morning summary (admin, once)")
     public ResponseEntity<?> registerTemplate(@AuthenticationPrincipal CustomUserDetails user) {
         if (user == null || !"ADMIN".equals(user.getUserRole())) return fail(HttpStatus.FORBIDDEN, "Admins only");
-        try {
-            return ok("Submitted to Meta for approval", whatsapp.createTemplate(SmmAlertService.templateDefinition(whatsappProps.getTemplateLanguage())));
-        } catch (Exception e) {
-            return fail(HttpStatus.BAD_GATEWAY, e.getMessage());
+        String lang = whatsappProps.getTemplateLanguage();
+        Map<String, Object> results = new LinkedHashMap<>();
+        for (Map<String, Object> def : List.of(SmmAlertService.templateDefinition(lang),
+                com.dayworks_ltd.loyalty_engine.smm.intake.SmmLeadAlertService.templateDefinition(lang),
+                com.dayworks_ltd.loyalty_engine.smm.intake.SmmMorningSummary.templateDefinition(lang))) {
+            try {
+                results.put(String.valueOf(def.get("name")), whatsapp.createTemplate(def));
+            } catch (Exception e) {
+                results.put(String.valueOf(def.get("name")), Map.of("error", String.valueOf(e.getMessage())));
+            }
         }
+        return ok("Submitted to Meta for approval", results);
     }
 
     // ───────────────────────────── helpers ─────────────────────────────

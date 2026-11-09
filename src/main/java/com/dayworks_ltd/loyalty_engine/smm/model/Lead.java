@@ -94,6 +94,14 @@ public class Lead {
     /** True when the place they gave is in one of the seller's delivery zones; null = no place given. */
     @Column(name = "zone_match")
     private Boolean zoneMatch;
+    /** Just became hot on a live comment: the seller's WhatsApp alert hasn't gone out yet. */
+    @Column(name = "hot_alert_pending")
+    private Boolean hotAlertPending;
+    @Column(name = "hot_alerted_at")
+    private LocalDateTime hotAlertedAt;
+    /** What they want, for the alert: "black, size 12", "to book". */
+    @Column(name = "hot_want", length = 120)
+    private String hotWant;
 
     // Timestamps
     @Column(name = "first_contact_at", nullable = false)

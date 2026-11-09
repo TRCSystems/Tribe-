@@ -68,6 +68,9 @@ public class SmmReply {
     /** What the seller changed it to in the morning review, if anything: used to teach the voice. */
     @Column(name = "seller_correction", columnDefinition = "TEXT")
     private String sellerCorrection;
+    /** When the seller looked at it in the morning review (good, or fixed). */
+    @Column(name = "seller_reviewed_at")
+    private LocalDateTime sellerReviewedAt;
 
     @Column(columnDefinition = "TEXT")
     private String error;

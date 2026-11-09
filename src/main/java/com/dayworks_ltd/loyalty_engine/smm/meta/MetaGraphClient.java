@@ -215,6 +215,16 @@ public class MetaGraphClient {
         return new SentMessage(str(res.get("recipient_id")), str(res.get("message_id")));
     }
 
+    /**
+     * A normal Messenger / Instagram message to someone who has written to the Page in the last 24 hours (for example
+     * the seller's answer to a question the agents handed over). recipientId is the ID their messages arrive with.
+     */
+    public SentMessage sendMessage(String recipientId, String text, String pageToken) {
+        Map<String, Object> res = postForm(graph("me/messages"), Map.of("recipient", json(Map.of("id", recipientId)),
+                "messaging_type", "RESPONSE", "message", json(Map.of("text", text))), pageToken);
+        return new SentMessage(str(res.get("recipient_id")), str(res.get("message_id")));
+    }
+
     public static Map<String, String> privateReplyFields(String commentId, String text) {
         return Map.of("recipient", json(Map.of("comment_id", commentId)), "message", json(Map.of("text", text)));
     }

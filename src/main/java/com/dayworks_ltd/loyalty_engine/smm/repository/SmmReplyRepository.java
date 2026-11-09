@@ -13,6 +13,18 @@ public interface SmmReplyRepository extends JpaRepository<SmmReply, Long> {
     /** The sender's queue, oldest first, so a comment's public reply goes before its private one. */
     List<SmmReply> findTop50ByStatusOrderByIdAsc(SmmReply.Status status);
 
+    /** The latest replies of one kind for a seller: the Writer varies its angle from them. */
+    List<SmmReply> findTop3ByMerchantIdAndKindOrderByIdDesc(Long merchantId, SmmReply.Kind kind);
+
+    /** Sent replies from a period the seller hasn't reviewed yet, oldest first (morning review). */
+    List<SmmReply> findTop10ByMerchantIdAndStatusAndKindInAndSentAtAfterAndSellerReviewedAtIsNullOrderByIdAsc(
+            Long merchantId, SmmReply.Status status, java.util.Collection<SmmReply.Kind> kinds, LocalDateTime since);
+
+    long countByMerchantIdAndStatusAndKindInAndSentAtAfter(Long merchantId, SmmReply.Status status,
+                                                           java.util.Collection<SmmReply.Kind> kinds, LocalDateTime since);
+
+    long countByMerchantIdAndKindAndBuyerRepliedAtAfter(Long merchantId, SmmReply.Kind kind, LocalDateTime since);
+
     /** The morning summary: what the agents did since yesterday morning. */
     List<SmmReply> findByMerchantIdAndCreatedAtAfterOrderByCreatedAtAsc(Long merchantId, LocalDateTime since);
 

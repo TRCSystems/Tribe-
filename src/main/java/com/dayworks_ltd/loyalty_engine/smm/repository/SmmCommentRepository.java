@@ -48,4 +48,8 @@ public interface SmmCommentRepository extends JpaRepository<SmmComment, Long> {
 
     /** Bad comments on one post since a time: grouped into one urgent alert. */
     long countByMerchantIdAndPostIdAndNegativeTrueAndReceivedAtAfter(Long merchantId, String postId, LocalDateTime since);
+
+    long countByMerchantIdAndReceivedAtAfter(Long merchantId, LocalDateTime since);
+
+    long countByMerchantIdAndBuyerTrueAndReceivedAtAfter(Long merchantId, LocalDateTime since);
 }

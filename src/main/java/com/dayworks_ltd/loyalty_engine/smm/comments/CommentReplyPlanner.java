@@ -91,7 +91,41 @@ public final class CommentReplyPlanner {
         return text != null && LINK.matcher(text).find();
     }
 
+    /**
+     * The move for one comment. Every private reply ends with one easy question: Meta allows a single private reply per
+     * comment, so only the buyer's answer opens a chat (see {@link #closingQuestion}).
+     */
     public static Plan plan(String comment, CommentReader.Reading reading, List<Item> postItems, Shop shop, Duration commentAge) {
+        Plan p = draft(comment, reading, postItems, shop, commentAge);
+        if (p.privateReply() == null || endsWithQuestion(p.privateReply())) return p;
+        boolean sw = reading == null || reading.language() == null || "sw".equalsIgnoreCase(reading.language());
+        return new Plan(p.publicReply(), p.privateReply() + fallbackQuestion(sw, reading), p.hideComment(), p.handover(), p.demand(), p.urgent());
+    }
+
+    /** The last line of the message asks something. */
+    public static boolean endsWithQuestion(String text) {
+        if (text == null) return false;
+        String[] lines = text.strip().split("\\n");
+        String last = lines[lines.length - 1];
+        return last.contains("?") || last.contains("？");
+    }
+
+    /** A question to end on when the move itself has none, by what the commenter wants. */
+    static String fallbackQuestion(boolean sw, CommentReader.Reading r) {
+        Intent intent = r == null || r.intent() == null ? Intent.OTHER : r.intent();
+        if (intent == Intent.COMPLAINT || (r != null && r.negative() && !isBuyer(r))) {
+            return sw ? "\n\nUnaweza kutueleza kilichotokea?" : "\n\nCould you tell us what happened?";
+        }
+        return switch (intent) {
+            case AFTER_SALES -> sw ? "\n\nNi bidhaa gani, na uliinunua lini?" : "\n\nWhich item was it, and when did you buy it?";
+            case QUALITY_DOUBT -> sw ? "\n\nUngependa tukutumie picha zaidi?" : "\n\nWould you like us to send you more photos?";
+            case ADVICE -> sw ? "\n\nUtaitumia kwa nini hasa?" : "\n\nWhat will you mainly use it for?";
+            case LOCATION -> sw ? "\n\nUnatafuta bidhaa gani?" : "\n\nWhich item are you looking for?";
+            default -> sw ? "\n\nTukusaidie na nini?" : "\n\nWhat can we help you with?";
+        };
+    }
+
+    private static Plan draft(String comment, CommentReader.Reading reading, List<Item> postItems, Shop shop, Duration commentAge) {
         boolean phone = hasPhoneNumber(comment);
         boolean canDm = commentAge == null || commentAge.compareTo(PRIVATE_REPLY_WINDOW) < 0;
         // Swahili for Swahili or Sheng (and when unsure); English otherwise, including French, Portuguese and other
@@ -107,8 +141,8 @@ public final class CommentReplyPlanner {
         // public reply, and goes to the seller straight away. The commenter gets a calm private message.
         boolean negative = reading != null && reading.negative();
         if (intent == Intent.COMPLAINT || (negative && !buyer)) {
-            String sorry = sw ? "Habari, pole sana kwa shida. Tumeona ujumbe wako na mwenye duka atakushughulikia sasa hivi. Tueleze kilichotokea hapa."
-                    : "Hi, we're very sorry about this. We've seen your comment and the owner will deal with it right away. Tell us here what happened.";
+            String sorry = sw ? "Habari, pole sana kwa shida. Tumeona ujumbe wako na mwenye duka atakushughulikia sasa hivi.\n\nUnaweza kutueleza kilichotokea?"
+                    : "Hi, we're very sorry about this. We've seen your comment and the owner will deal with it right away.\n\nCould you tell us what happened?";
             return new Plan(null, canDm ? sorry : null, true, true, null, true);
         }
         if (negative) {
@@ -155,7 +189,7 @@ public final class CommentReplyPlanner {
             String pub = phone ? privacyReply(sw, canDm, shop)
                     : canDm ? (sw ? "Swali zuri 🙏 Tumekutumia DM." : "Good question 🙏 We've sent you a DM.")
                     : (sw ? "Swali zuri 🙏" : "Good question 🙏") + orderLine(sw, shop);
-            return new Plan(pub, canDm ? card + more : null, phone, true, null);
+            return new Plan(pub, canDm ? beforeQuestion(card, more) : null, phone, true, null);
         }
         if (intent == Intent.SET && postItems != null && !postItems.isEmpty()) {
             // Every piece on the post with its price; the seller confirms the set price (sets are priced per seller)
@@ -188,13 +222,14 @@ public final class CommentReplyPlanner {
             return new Plan(pub, canDm ? whereCard(sw, shop, wa) : null, phone, unsure, null);
         }
         if (product.isEmpty() && intent == Intent.CONTACT) {
-            String dm = greeting(sw, shop) + whatsappLine(sw, shop, true);
+            String dm = (sw ? "Habari! 💚 Asante kwa kuwasiliana na " + shop.name() + "." : "Hi! 💚 Thanks for reaching out to " + shop.name() + ".")
+                    + whatsappLine(sw, shop, true) + (sw ? "\n\nUngependa nini leo?" : "\n\nWhat would you like today?");
             return new Plan(publicFor(sw, canDm, phone, shop, null), canDm ? dm : null, phone, false, null);
         }
         if (product.isEmpty()) {
             // No product tagged or can't tell which one: a person answers, the buyer still hears back at once
-            String dm = sw ? "Habari! Asante kwa kuuliza 💚 Ni bidhaa gani ungependa? Tutumie picha au jina, tutakujibu sasa hivi."
-                    : "Hi! Thanks for asking 💚 Which item would you like? Send us a photo or the name and we'll answer right away.";
+            String dm = sw ? "Habari! Asante kwa kuuliza 💚 Tutumie picha au jina la bidhaa, tutakujibu sasa hivi.\n\nNi bidhaa gani ungependa?"
+                    : "Hi! Thanks for asking 💚 Send us a photo or the name of the item and we'll answer right away.\n\nWhich item would you like?";
             return new Plan(publicFor(sw, canDm, phone, shop, null), canDm ? dm : null, phone, true, null);
         }
 
@@ -237,6 +272,13 @@ public final class CommentReplyPlanner {
         String pub = phone ? privacyReply(sw, canDm, shop)
                 : opener + (canDm ? (sw ? "Tumekutumia DM 💚" : "We've sent you a DM 💚") : orderLine(sw, shop, services).trim());
         return new Plan(pub, canDm ? productCard(sw, inStock, shop, wa) : null, phone, unsure, demand);
+    }
+
+    /** Puts a line in front of the message's closing question (the last paragraph), or at the end when there is none. */
+    static String beforeQuestion(String message, String line) {
+        int i = message.lastIndexOf("\n\n");
+        if (i > 0 && endsWithQuestion(message)) return message.substring(0, i) + line + message.substring(i);
+        return message + line;
     }
 
     private static CommentReader.Reading withoutNegative(CommentReader.Reading r) {
