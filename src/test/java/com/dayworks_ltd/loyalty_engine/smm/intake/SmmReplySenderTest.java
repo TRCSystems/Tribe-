@@ -131,6 +131,14 @@ class SmmReplySenderTest {
     }
 
     @Test
+    void aCommentHiddenByHandCountsAsHidden() {
+        assertTrue(SmmCommentWorker.alreadyHidden("Meta said 400: {\"error\":{\"code\":1,\"error_subcode\":1446036,"
+                + "\"error_user_msg\":\"Comment is already marked as spam.\"}}"));
+        assertFalse(SmmCommentWorker.alreadyHidden("Meta said 400: (#200) Permissions error"));
+        assertFalse(SmmCommentWorker.alreadyHidden(null));
+    }
+
+    @Test
     @SuppressWarnings("unchecked")
     void thePrivateReplyIsAddressedByCommentAndTheTokenStaysOutOfTheUrl() {
         Map<String, String> fields = MetaGraphClient.privateReplyFields("POST1_C1", "Bei ni 1,500 + delivery 💚");

@@ -178,6 +178,11 @@ public class SmmCommentWorker {
             replies.save(hide.status(SmmReply.Status.SENT).sentAt(LocalDateTime.now(SmmIntakeService.NAIROBI)).build());
             log.info("SokoReply: hid comment {} on {} (merchant {})", c.getId(), c.getPlatform(), c.getMerchantId());
         } catch (Exception e) {
+            if (alreadyHidden(e.getMessage())) { // hidden by hand in Business Suite before we got to it
+                replies.save(hide.status(SmmReply.Status.SENT).sentAt(LocalDateTime.now(SmmIntakeService.NAIROBI)).build());
+                log.info("SokoReply: comment {} was already hidden (merchant {})", c.getId(), c.getMerchantId());
+                return;
+            }
             replies.save(hide.status(SmmReply.Status.FAILED).error(e.getMessage()).build());
             log.warn("SokoReply: comment {} NOT hidden (merchant {}): {}", c.getId(), c.getMerchantId(), MetaGraphClient.redact(e.getMessage()));
         }
@@ -258,5 +263,10 @@ public class SmmCommentWorker {
     private static String firstPhone(String text) {
         java.util.regex.Matcher m = java.util.regex.Pattern.compile("(?:\\+?254|0)[17]\\d{2}[\\s-]?\\d{3}[\\s-]?\\d{3}").matcher(text);
         return m.find() ? m.group().replaceAll("[\\s-]", "") : null;
+    }
+
+    /** Meta refuses to hide a comment that is already hidden (subcode 1446036, "Duplicate request to mark as spam"). */
+    static boolean alreadyHidden(String error) {
+        return error != null && (error.contains("1446036") || error.contains("already marked as spam"));
     }
 }
