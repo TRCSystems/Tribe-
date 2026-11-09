@@ -3,8 +3,13 @@ package com.dayworks_ltd.loyalty_engine.smm.meta;
 import com.dayworks_ltd.loyalty_engine.smm.model.SocialPlatform;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.HttpEntity;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.util.LinkedMultiValueMap;
+import org.springframework.util.MultiValueMap;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.HttpStatusCodeException;
 import org.springframework.web.client.RestTemplate;
@@ -191,6 +196,39 @@ public class MetaGraphClient {
                 .queryParam("access_token", pageToken));
     }
 
+    /** A public reply under a comment, in the Page's name. Returns the new comment's ID. */
+    public String replyToComment(SocialPlatform platform, String commentId, String text, String pageToken) {
+        Map<String, Object> res = postForm(graph(commentId + (platform == SocialPlatform.INSTAGRAM ? "/replies" : "/comments")),
+                Map.of("message", text), pageToken);
+        return str(res.get("id"));
+    }
+
+    /** What Meta returns for a private reply: recipientId is the ID the buyer's messages will arrive with. */
+    public record SentMessage(String recipientId, String messageId) {}
+
+    /**
+     * The private reply to a comment (one per comment, within 7 days of it). Addressed by comment ID, so it works
+     * when Meta did not give us the commenter's ID. Facebook and Instagram both go through the Page token.
+     */
+    public SentMessage privateReply(String commentId, String text, String pageToken) {
+        Map<String, Object> res = postForm(graph("me/messages"), privateReplyFields(commentId, text), pageToken);
+        return new SentMessage(str(res.get("recipient_id")), str(res.get("message_id")));
+    }
+
+    public static Map<String, String> privateReplyFields(String commentId, String text) {
+        return Map.of("recipient", json(Map.of("comment_id", commentId)), "message", json(Map.of("text", text)));
+    }
+
+    private static final com.fasterxml.jackson.databind.ObjectMapper JSON = new com.fasterxml.jackson.databind.ObjectMapper();
+
+    private static String json(Object o) {
+        try {
+            return JSON.writeValueAsString(o);
+        } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+            throw new IllegalArgumentException(e);
+        }
+    }
+
     // ───────────────────────────── setup ─────────────────────────────
 
     @SuppressWarnings("unchecked")
@@ -366,11 +404,32 @@ public class MetaGraphClient {
         return exchange(HttpMethod.POST, b);
     }
 
-    @SuppressWarnings("unchecked")
+    /**
+     * A POST with the fields and the token in a form body: message text can be long and hold "+" or emoji, which a
+     * query string mangles, and the token stays out of the URL.
+     */
+    private Map<String, Object> postForm(UriComponentsBuilder b, Map<String, String> fields, String token) {
+        return exchange(HttpMethod.POST, b, formBody(fields, token));
+    }
+
+    public static HttpEntity<MultiValueMap<String, String>> formBody(Map<String, String> fields, String token) {
+        MultiValueMap<String, String> form = new LinkedMultiValueMap<>();
+        fields.forEach(form::add);
+        form.add("access_token", token);
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.APPLICATION_FORM_URLENCODED);
+        return new HttpEntity<>(form, headers);
+    }
+
     private Map<String, Object> exchange(HttpMethod method, UriComponentsBuilder b) {
+        return exchange(method, b, null);
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> exchange(HttpMethod method, UriComponentsBuilder b, HttpEntity<?> request) {
         URI uri = toUri(b);
         try {
-            ResponseEntity<Map> res = restTemplate.exchange(uri, method, null, Map.class);
+            ResponseEntity<Map> res = restTemplate.exchange(uri, method, request, Map.class);
             return res.getBody() == null ? Map.of() : res.getBody();
         } catch (HttpStatusCodeException e) {
             // Meta's error text, never the URL (it carries the token)

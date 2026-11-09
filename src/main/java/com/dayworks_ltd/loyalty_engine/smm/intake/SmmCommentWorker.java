@@ -25,8 +25,8 @@ import java.util.stream.Collectors;
 /**
  * Works through new comments: reads each one (two-step Reader), creates or warms up the lead, plans the move and
  * records it. Protective actions run from day one, even in shadow mode: a comment with a phone number or a harmful
- * comment is hidden, and urgent ones alert the seller. Public and private replies are only logged until sending
- * is built (Phase 3) and the seller is switched to live.
+ * comment is hidden, and urgent ones alert the seller. Public and private replies wait for {@link SmmReplySender}
+ * when the seller is live; in shadow mode, while paused, or for old comments fetched at connect they are only logged.
  */
 @Slf4j
 @Service
@@ -108,9 +108,10 @@ public class SmmCommentWorker {
         // but a phone number or a bad comment is still hidden
         if (Boolean.TRUE.equals(c.getSellerAnswered()) || repeat) plan = alreadyAnswered(plan);
 
-        // Replies: only logged for now (shadow mode, or sending not built yet)
-        logReply(c, SmmReply.Kind.PUBLIC, plan.publicReply());
-        logReply(c, SmmReply.Kind.PRIVATE, plan.privateReply());
+        // Replies: queued for the sender when the seller is live, otherwise only logged
+        SmmReply.Status status = sendable(profile, c) ? SmmReply.Status.PENDING : SmmReply.Status.LOGGED;
+        logReply(c, SmmReply.Kind.PUBLIC, plan.publicReply(), status);
+        logReply(c, SmmReply.Kind.PRIVATE, plan.privateReply(), status);
 
         // Protective action, from day one and even when the seller paused the agents: hiding says nothing in their name
         if (plan.hideComment()) hide(c, account);
@@ -135,6 +136,14 @@ public class SmmCommentWorker {
         return new Plan(null, null, plan.hideComment(), false, plan.demand(), false);
     }
 
+    /**
+     * Whether this comment's replies go out: the seller is out of shadow mode and has not paused the agents, and the
+     * comment came in live. Old comments fetched at connect are not answered in the seller's name weeks later.
+     */
+    static boolean sendable(SmmSellerProfile profile, SmmComment c) {
+        return !profile.isShadowMode() && !profile.isAgentsPaused() && !Boolean.TRUE.equals(c.getBackfilled());
+    }
+
     /** Old comments fetched after connecting are hidden if bad, but are not an emergency: no urgent alert. */
     static boolean urgent(Plan plan, SmmComment c) {
         return plan.urgent() && !Boolean.TRUE.equals(c.getBackfilled());
@@ -148,13 +157,13 @@ public class SmmCommentWorker {
         return Optional.empty();
     }
 
-    private void logReply(SmmComment c, SmmReply.Kind kind, String text) {
+    private void logReply(SmmComment c, SmmReply.Kind kind, String text, SmmReply.Status status) {
         if (text == null) return;
         replies.save(SmmReply.builder().merchantId(c.getMerchantId()).commentId(c.getId()).kind(kind).text(text)
                 // who a private reply goes to, so the buyer's answer can be matched to it (the sender updates it
                 // with the recipient ID Meta returns)
                 .recipientId(kind == SmmReply.Kind.PRIVATE ? c.getCommenterId() : null)
-                .model("planner").status(SmmReply.Status.LOGGED).build());
+                .model("planner").status(status).build());
     }
 
     private void hide(SmmComment c, SmmAccount account) {

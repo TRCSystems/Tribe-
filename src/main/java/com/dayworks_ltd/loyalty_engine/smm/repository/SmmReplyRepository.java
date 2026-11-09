@@ -10,6 +10,9 @@ import java.util.Optional;
 public interface SmmReplyRepository extends JpaRepository<SmmReply, Long> {
     List<SmmReply> findByCommentIdOrderByCreatedAtAsc(Long commentId);
 
+    /** The sender's queue, oldest first, so a comment's public reply goes before its private one. */
+    List<SmmReply> findTop50ByStatusOrderByIdAsc(SmmReply.Status status);
+
     /** The morning summary: what the agents did since yesterday morning. */
     List<SmmReply> findByMerchantIdAndCreatedAtAfterOrderByCreatedAtAsc(Long merchantId, LocalDateTime since);
 
