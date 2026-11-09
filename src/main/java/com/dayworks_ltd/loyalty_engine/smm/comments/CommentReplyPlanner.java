@@ -100,8 +100,9 @@ public final class CommentReplyPlanner {
         Intent intent = reading == null || reading.intent() == null ? Intent.OTHER : reading.intent();
         boolean buyer = reading != null && (reading.buyer() || BUYING.contains(intent));
 
-        // Spam gets no reply; a number or a link in it is hidden so the seller's followers aren't drawn into a scam
-        if (intent == Intent.SPAM) return new Plan(null, null, phone || hasLink(comment), false, null);
+        // Spam gets no reply and is hidden, link or not ("check your hidden messages", betting bait), so the seller's
+        // followers aren't drawn into a scam under the seller's own post
+        if (intent == Intent.SPAM) return new Plan(null, null, true, false, null);
         // A complaint or a bad comment (fraud accusation, insult, mocking the work) is hidden from the public, gets no
         // public reply, and goes to the seller straight away. The commenter gets a calm private message.
         boolean negative = reading != null && reading.negative();

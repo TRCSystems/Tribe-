@@ -237,7 +237,7 @@ class CommentReplyPlannerTest {
     }
 
     @Test
-    void spamWithALinkIsHiddenAndNotAnswered() {
+    void spamIsHiddenAndNotAnswered() {
         Reading spam = new Reading(Intent.SPAM, false, false, null, null, null, "en", "high");
         Plan link = CommentReplyPlanner.plan("https://whatsapp.com/channel/0029VbE2HK7 Night Movie Like", spam, reel, SHOP, FRESH);
         assertTrue(link.hideComment());
@@ -245,8 +245,10 @@ class CommentReplyPlannerTest {
         assertNull(link.privateReply());
 
         Plan bait = CommentReplyPlanner.plan("Come to my private chat so we can talk.", spam, reel, SHOP, FRESH);
-        assertFalse(bait.hideComment(), "no link or number: left alone, just not answered");
+        assertTrue(bait.hideComment(), "spam is hidden even with no link or number");
         assertNull(bait.publicReply());
+        assertNull(bait.privateReply());
+        assertFalse(bait.handover(), "spam doesn't need the seller");
     }
 
     @Test
