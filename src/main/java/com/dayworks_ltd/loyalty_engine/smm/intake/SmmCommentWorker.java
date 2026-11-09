@@ -240,7 +240,7 @@ public class SmmCommentWorker {
         String name = account == null || account.getPageName() == null ? "our shop" : account.getPageName().replaceFirst("^@", "");
         String wa = p.getWhatsappNumber() == null || p.getWhatsappNumber().isBlank() ? null
                 : "https://wa.me/" + p.getWhatsappNumber().replaceAll("\\D", "").replaceFirst("^0", "254");
-        return new CommentReplyPlanner.Shop(name, p.getLocationText(), null, wa);
+        return new CommentReplyPlanner.Shop(name, p.getLocationText(), null, wa, p.getLandmarkDirections(), p.getOpeningHours());
     }
 
     private static String firstPhone(String text) {

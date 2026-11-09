@@ -424,4 +424,38 @@ class CommentReplyPlannerTest {
         Plan p = CommentReplyPlanner.plan("mko wapi", reading(Intent.LOCATION, null, null, "sw"), reel, SHOP, Duration.ofDays(8));
         assertNull(p.privateReply());
     }
+
+    /** 9 Nov 2026, ASANO GROUP's first real comment: "Where are you located" on a post with no product tagged. */
+    @Test
+    void whereAreYouOnAPostWithNoProductGivesTheShopLocation() {
+        Shop shop = new Shop("ASANO GROUP", "NAIROBI CBD", null, "https://wa.me/254708000000", "TOM MBOYA STREET", "8AM -7PM");
+        Reading r = new Reading(Intent.LOCATION, true, false, null, null, null, "en", "high");
+        Plan p = CommentReplyPlanner.plan("Where are you located", r, List.of(), shop, FRESH);
+
+        assertEquals("We're at NAIROBI CBD 📍 We've sent you a DM 💚", p.publicReply());
+        assertTrue(p.privateReply().startsWith("Hi! 💚 We're at NAIROBI CBD, TOM MBOYA STREET."), p.privateReply());
+        assertTrue(p.privateReply().contains("Open: 8AM -7PM"));
+        assertTrue(p.privateReply().contains("https://wa.me/254708000000"), "no order link, so WhatsApp is how to buy");
+        assertFalse(p.privateReply().contains("Which item would you like"));
+        assertFalse(p.handover(), "the agent answered it fully");
+
+        Plan sw = CommentReplyPlanner.plan("mko wapi", new Reading(Intent.LOCATION, true, false, null, null, null, "sw", "high"),
+                null, shop, FRESH);
+        assertEquals("Tuko NAIROBI CBD 📍 Tumekutumia DM 💚", sw.publicReply());
+        assertTrue(sw.privateReply().contains("Tuko wazi: 8AM -7PM"));
+    }
+
+    @Test
+    void whereAreYouWithNoLocationSetGoesToTheSeller() {
+        Shop shop = new Shop("ASANO GROUP", "  ", null, null);
+        Reading r = new Reading(Intent.LOCATION, true, false, null, null, null, "en", "high");
+        Plan p = CommentReplyPlanner.plan("Where are you located", r, List.of(), shop, FRESH);
+
+        assertTrue(p.handover());
+        assertFalse(p.publicReply().contains("null"));
+        assertTrue(p.privateReply().contains("exact location"));
+
+        Plan withProduct = CommentReplyPlanner.plan("mko wapi", reading(Intent.LOCATION, null, null, "sw"), reel, shop, FRESH);
+        assertFalse(withProduct.publicReply().contains("null"), withProduct.publicReply());
+    }
 }

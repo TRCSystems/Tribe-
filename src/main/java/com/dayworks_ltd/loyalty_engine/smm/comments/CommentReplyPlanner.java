@@ -45,8 +45,25 @@ public final class CommentReplyPlanner {
         }
     }
 
-    /** The business's answers that don't depend on the product. orderLink orders goods or books services. */
-    public record Shop(String name, String location, String orderLink, String whatsappLink) {}
+    /**
+     * The business's answers that don't depend on the product. orderLink orders goods or books services. landmark is
+     * how to find the shop ("Tom Mboya Street, next to ..."); hours are the opening hours as the seller wrote them.
+     */
+    public record Shop(String name, String location, String orderLink, String whatsappLink, String landmark, String hours) {
+        public Shop(String name, String location, String orderLink, String whatsappLink) {
+            this(name, location, orderLink, whatsappLink, null, null);
+        }
+
+        public Shop {
+            location = blankToNull(location);
+            landmark = blankToNull(landmark);
+            hours = blankToNull(hours);
+        }
+
+        private static String blankToNull(String s) {
+            return s == null || s.isBlank() ? null : s.trim();
+        }
+    }
 
     /** What was asked for and isn't in stock, for restocking decisions. */
     public record Demand(String productCode, String colour, String size, boolean inStock) {}
@@ -156,6 +173,19 @@ public final class CommentReplyPlanner {
                     : (sw ? "Karibu! 💚" : "Welcome! 💚") + orderLine(sw, shop, true);
             return new Plan(pub, canDm ? productCard(sw, postItems, shop, wa) : null, phone, unsure, null);
         }
+        if (product.isEmpty() && intent == Intent.LOCATION) {
+            // "Where are you located" on a post with no product tagged: the answer is where the shop is, not a product
+            if (shop.location() == null) {
+                // The seller hasn't said where they are: a person answers, the buyer still hears back at once
+                String dm = sw ? "Habari! Asante kwa kuuliza 💚 Mwenye duka atakutumia mahali tulipo sasa hivi."
+                        : "Hi! Thanks for asking 💚 The owner will send you our exact location right away.";
+                return new Plan(publicFor(sw, canDm, phone, shop, null), canDm ? dm : null, phone, true, null);
+            }
+            String pub = phone ? privacyReply(sw, canDm, shop)
+                    : (sw ? "Tuko " : "We're at ") + shop.location() + " 📍"
+                    + (canDm ? (sw ? " Tumekutumia DM 💚" : " We've sent you a DM 💚") : orderLine(sw, shop));
+            return new Plan(pub, canDm ? whereCard(sw, shop, wa) : null, phone, unsure, null);
+        }
         if (product.isEmpty() && intent == Intent.CONTACT) {
             String dm = greeting(sw, shop) + whatsappLine(sw, shop, true);
             return new Plan(publicFor(sw, canDm, phone, shop, null), canDm ? dm : null, phone, false, null);
@@ -176,7 +206,7 @@ public final class CommentReplyPlanner {
         Demand demand = colour != null || size != null
                 ? new Demand(first.productCode(), colour, size, !inStock.isEmpty()) : null;
 
-        if (intent == Intent.LOCATION && colour == null && size == null) {
+        if (intent == Intent.LOCATION && colour == null && size == null && shop.location() != null) {
             String pub = phone ? privacyReply(sw, canDm, shop)
                     : (sw ? "Tuko " + shop.location() + " 📍" : "We're at " + shop.location() + " 📍")
                     + (canDm ? (sw ? " Tumekutumia DM 💚" : " We've sent you a DM 💚") : orderLine(sw, shop));
@@ -284,6 +314,21 @@ public final class CommentReplyPlanner {
     private static String privacyReply(boolean sw, boolean canDm, Shop shop) {
         return sw ? "Asante! Tumeficha namba yako ili iwe salama." + (canDm ? " Tumekutumia DM 💚" : orderLine(true, shop))
                 : "Thanks! We've hidden your number to keep it safe." + (canDm ? " We've sent you a DM 💚" : orderLine(false, shop));
+    }
+
+    /**
+     * The DM for "where are you" when no product is in question: where, how to find it, when it's open, then one easy
+     * question about what they want so the answer opens a chat.
+     */
+    static String whereCard(boolean sw, Shop shop, boolean wa) {
+        StringBuilder sb = new StringBuilder(sw ? "Habari! 💚 Tuko " : "Hi! 💚 We're at ").append(shop.location());
+        if (shop.landmark() != null) sb.append(", ").append(shop.landmark());
+        sb.append(".");
+        if (shop.hours() != null) sb.append(sw ? "\nTuko wazi: " : "\nOpen: ").append(shop.hours());
+        if (shop.orderLink() != null) sb.append(sw ? "\n\nAgiza hapa: " : "\n\nOrder here: ").append(shop.orderLink());
+        sb.append(whatsappLine(sw, shop, wa || shop.orderLink() == null));
+        return sb + (sw ? "\n\nUnatafuta bidhaa gani? Tutumie picha au jina, tukujibu bei."
+                : "\n\nWhich item are you looking for? Send us a photo or the name and we'll tell you the price.");
     }
 
     private static String greeting(boolean sw, Shop shop) {
