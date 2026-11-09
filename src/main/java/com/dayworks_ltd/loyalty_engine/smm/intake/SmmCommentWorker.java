@@ -170,13 +170,16 @@ public class SmmCommentWorker {
         SmmReply.SmmReplyBuilder hide = SmmReply.builder().merchantId(c.getMerchantId()).commentId(c.getId()).kind(SmmReply.Kind.HIDE);
         if (account == null || account.getStatus() != SmmAccount.Status.ACTIVE) {
             replies.save(hide.status(SmmReply.Status.FAILED).error("Account not connected").build());
+            log.warn("SokoReply: comment {} NOT hidden (merchant {}): account not connected", c.getId(), c.getMerchantId());
             return;
         }
         try {
             graph.hideComment(c.getPlatform(), c.getCommentId(), account.getAccessToken());
             replies.save(hide.status(SmmReply.Status.SENT).sentAt(LocalDateTime.now(SmmIntakeService.NAIROBI)).build());
+            log.info("SokoReply: hid comment {} on {} (merchant {})", c.getId(), c.getPlatform(), c.getMerchantId());
         } catch (Exception e) {
             replies.save(hide.status(SmmReply.Status.FAILED).error(e.getMessage()).build());
+            log.warn("SokoReply: comment {} NOT hidden (merchant {}): {}", c.getId(), c.getMerchantId(), MetaGraphClient.redact(e.getMessage()));
         }
     }
 

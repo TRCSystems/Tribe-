@@ -85,16 +85,32 @@ public class SmmIntakeService {
         return stored;
     }
 
+    /**
+     * Recent comments Meta didn't send us, found by the catch-up: stored as live ones (answered, and hidden with an
+     * alert if bad), unless the seller already replied. Doesn't count as a webhook.
+     */
+    public int storeCaughtUp(List<Incoming> fetched, java.util.Set<String> answeredBySeller) {
+        int stored = 0;
+        for (Incoming in : fetched) {
+            if (save(in, false, answeredBySeller.contains(in.commentId()), false)) stored++;
+        }
+        return stored;
+    }
+
     private boolean save(Incoming in, boolean backfill) {
         return save(in, backfill, false);
     }
 
     private boolean save(Incoming in, boolean backfill, boolean sellerAnswered) {
+        return save(in, backfill, sellerAnswered, !backfill);
+    }
+
+    private boolean save(Incoming in, boolean backfill, boolean sellerAnswered, boolean fromWebhook) {
         if (in.commentId() == null || in.accountId() == null) return false;
         Optional<SmmAccount> account = accounts.findByPlatformAndPageId(in.platform(), in.accountId());
         if (account.isEmpty() || account.get().getStatus() == SmmAccount.Status.DISCONNECTED) return false;
         SmmAccount a = account.get();
-        if (!backfill) {
+        if (fromWebhook) {
             a.setLastWebhookAt(LocalDateTime.now(NAIROBI));
             accounts.save(a);
         }
