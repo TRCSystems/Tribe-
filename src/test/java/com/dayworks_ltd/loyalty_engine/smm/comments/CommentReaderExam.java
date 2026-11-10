@@ -51,8 +51,8 @@ class CommentReaderExam {
         String id() { return answer.get("id").asText(); }
         String text() { return answer.get("text").asText(); }
         boolean unsure() { return answer.path("unsure").asBoolean(); }
-        /** Lines 1-221 and the salon rows (841+) were labelled by a person; the rest by agents. */
-        boolean handLabelled() { return line < 221 || line >= 840; }
+        /** Lines 1-221 and the salon rows (841-975) were labelled by a person; the rest, and rows marked labelledBy=agent, by agents. */
+        boolean handLabelled() { return !"agent".equals(answer.path("labelledBy").asText()) && (line < 221 || line >= 840); }
     }
 
     record Answer(String intent, boolean buyer, boolean wantsWhatsApp, String language, String error, String confidence, String firstIntent, Boolean secondLook, Boolean negative) {
