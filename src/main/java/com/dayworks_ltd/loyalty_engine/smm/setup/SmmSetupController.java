@@ -502,7 +502,7 @@ public class SmmSetupController {
     }
 
     @PostMapping("/admin/till")
-    @Operation(summary = "Record a seller's till after our KES 10 test payment: number + the name exactly as M-Pesa showed it (admin)")
+    @Operation(summary = "Record a seller's till after our KES 1 test payment: number + the name exactly as M-Pesa showed it (admin)")
     public ResponseEntity<?> verifyTill(@AuthenticationPrincipal CustomUserDetails user, @RequestBody Map<String, Object> body) {
         if (user == null || !"ADMIN".equals(user.getUserRole())) return fail(HttpStatus.FORBIDDEN, "Admins only");
         Double merchant = number(body.get("merchantId"));

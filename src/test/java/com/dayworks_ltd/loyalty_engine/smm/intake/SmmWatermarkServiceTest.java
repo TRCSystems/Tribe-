@@ -48,7 +48,7 @@ class SmmWatermarkServiceTest {
     void aTillThatIsNotVerifiedYetGetsNoWatermark() {
         seller.setTillNumber("123456");
         assertTrue(service.handle(SELLER, "video", "", Map.of("video", Map.of("id", "MEDIA1", "mime_type", "video/mp4"))));
-        verify(whatsapp).sendText(eq(SELLER), contains("KES 10 test payment"));
+        verify(whatsapp).sendText(eq(SELLER), contains("KES 1 test payment"));
     }
 
     @Test
@@ -56,7 +56,7 @@ class SmmWatermarkServiceTest {
         assertTrue(service.handle(SELLER, "text", "Till 123 456", null));
         assertEquals("123456", seller.getTillNumber());
         assertNull(seller.getTillVerifiedAt(), "only our test payment verifies it");
-        verify(whatsapp).sendText(eq(SELLER), contains("KES 10"));
+        verify(whatsapp).sendText(eq(SELLER), contains("KES 1"));
 
         assertTrue(service.handle(SELLER, "text", "TILL 0712345678", null));
         assertEquals("123456", seller.getTillNumber(), "a personal M-Pesa number is not a till");

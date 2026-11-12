@@ -30,7 +30,7 @@ import java.util.regex.Pattern;
  * doesn't remove it.
  * <p>
  * Only sellers with their own verified Lipa na M-Pesa till get it: they are always paid into that till, and the name
- * on the watermark is the one M-Pesa shows (taken from a real KES 10 test payment), never the Page name. Sellers with
+ * on the watermark is the one M-Pesa shows (taken from a real KES 1 test payment), never the Page name. Sellers with
  * only a personal M-Pesa number get no watermark.
  * <p>
  * Sellers should send the video as a Document so WhatsApp doesn't compress it before Facebook compresses it again;
@@ -126,7 +126,7 @@ public class SmmWatermarkService {
     static String notReady(List<SmmSellerProfile> sellers) {
         boolean waiting = sellers.stream().anyMatch(p -> p.getTillNumber() != null && !p.getTillNumber().isBlank());
         if (waiting) {
-            return "We're still checking your till: our team makes a KES 10 test payment to see the exact name M-Pesa "
+            return "We're still checking your till: our team makes a KES 1 test payment to see the exact name M-Pesa "
                     + "shows buyers. We'll tell you here as soon as it's done, then send the video again.";
         }
         return "The video watermark shows buyers your Lipa na M-Pesa till, so a copycat Page can't redirect your "
@@ -149,7 +149,7 @@ public class SmmWatermarkService {
         profiles.saveAll(sellers);
         log.info("SokoReply: till {} given on WhatsApp by merchant(s) {}, waiting for the test payment", till,
                 sellers.stream().map(SmmSellerProfile::getMerchantId).toList());
-        whatsapp.sendText(from, "Thanks ✅ Our team will pay KES 10 into till " + till + " to see the exact name M-Pesa "
+        whatsapp.sendText(from, "Thanks ✅ Our team will pay KES 1 into till " + till + " to see the exact name M-Pesa "
                 + "shows buyers. That name goes on your videos. We'll tell you here when it's ready.");
         return true;
     }
@@ -266,7 +266,7 @@ public class SmmWatermarkService {
         }
     }
 
-    /** Our team confirmed the name on the KES 10 test payment: from now on the seller's videos get the watermark. */
+    /** Our team confirmed the name on the KES 1 test payment: from now on the seller's videos get the watermark. */
     public SmmSellerProfile verifyTill(Long merchantId, String tillNumber, String tillName) {
         SmmSellerProfile p = profiles.findByMerchantId(merchantId).orElseThrow(() -> new IllegalArgumentException("No SokoReply profile for merchant " + merchantId));
         String till = tillNumber == null ? "" : tillNumber.replaceAll("\\s", "");

@@ -99,7 +99,7 @@ public class SmmSellerProfile {
     @Column(name = "till_number", length = 10)
     private String tillNumber;
     /**
-     * The business name exactly as M-Pesa shows it when a buyer pays the till, copied from a real KES 10 test payment.
+     * The business name exactly as M-Pesa shows it when a buyer pays the till, copied from a real KES 1 test payment.
      * This is what the video watermark and the agents tell buyers to check, so it is never the Page name.
      */
     @Column(name = "till_name", length = 60)
