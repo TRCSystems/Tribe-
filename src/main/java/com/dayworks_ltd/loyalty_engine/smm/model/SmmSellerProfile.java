@@ -92,6 +92,22 @@ public class SmmSellerProfile {
     @Column(name = "awaiting_since")
     private LocalDateTime awaitingSince;
 
+    /**
+     * The seller's own Lipa na M-Pesa till. Sellers are always paid into their own till; Tribe never collects for them
+     * or changes where they are paid. Sellers with only a personal M-Pesa number have no till and get no watermark.
+     */
+    @Column(name = "till_number", length = 10)
+    private String tillNumber;
+    /**
+     * The business name exactly as M-Pesa shows it when a buyer pays the till, copied from a real KES 10 test payment.
+     * This is what the video watermark and the agents tell buyers to check, so it is never the Page name.
+     */
+    @Column(name = "till_name", length = 60)
+    private String tillName;
+    /** When our team made the test payment and confirmed {@link #tillName}. Null = not verified, no watermark yet. */
+    @Column(name = "till_verified_at")
+    private LocalDateTime tillVerifiedAt;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private LocalDateTime createdAt;
 

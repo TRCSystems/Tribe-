@@ -74,6 +74,83 @@ public class WhatsAppCloudClient {
         }
     }
 
+    /**
+     * Downloads a large file someone sent (a video sent as a document) straight to disk. Returns the file's type, or
+     * null when it can't be fetched or is larger than {@code maxBytes}.
+     */
+    @SuppressWarnings("unchecked")
+    public String downloadMediaToFile(String mediaId, java.nio.file.Path target, long maxBytes) {
+        if (mediaId == null || mediaId.isBlank() || props.getAccessToken().isBlank()) return null;
+        HttpHeaders headers = new HttpHeaders();
+        headers.setBearerAuth(props.getAccessToken());
+        try {
+            ResponseEntity<Map> info = restTemplate.exchange(GRAPH + props.getGraphVersion() + "/" + mediaId,
+                    org.springframework.http.HttpMethod.GET, new HttpEntity<>(headers), Map.class);
+            Map<String, Object> meta = info.getBody() == null ? Map.of() : info.getBody();
+            Object url = meta.get("url");
+            if (url == null) return null;
+            if (meta.get("file_size") instanceof Number n && n.longValue() > maxBytes) {
+                log.warn("WhatsApp media {} is too large ({} bytes)", mediaId, n);
+                return null;
+            }
+            Long written = restTemplate.execute(java.net.URI.create(url.toString()), org.springframework.http.HttpMethod.GET,
+                    req -> req.getHeaders().setBearerAuth(props.getAccessToken()),
+                    res -> {
+                        try (var in = res.getBody(); var out = java.nio.file.Files.newOutputStream(target)) {
+                            byte[] buf = new byte[64 * 1024];
+                            long total = 0;
+                            for (int r; (r = in.read(buf)) > 0; ) {
+                                total += r;
+                                if (total > maxBytes) return -1L;
+                                out.write(buf, 0, r);
+                            }
+                            return total;
+                        }
+                    });
+            if (written == null || written <= 0) return null;
+            return String.valueOf(meta.getOrDefault("mime_type", "application/octet-stream"));
+        } catch (Exception e) {
+            log.warn("WhatsApp media {} could not be downloaded: {}", mediaId, e.getMessage());
+            return null;
+        }
+    }
+
+    /** Uploads a file to WhatsApp so it can be sent; returns its media id, or null. */
+    @SuppressWarnings("unchecked")
+    public String uploadMedia(java.nio.file.Path file, String mimeType) {
+        if (!props.canSend()) return null;
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.MULTIPART_FORM_DATA);
+        headers.setBearerAuth(props.getAccessToken());
+        org.springframework.util.LinkedMultiValueMap<String, Object> form = new org.springframework.util.LinkedMultiValueMap<>();
+        form.add("messaging_product", "whatsapp");
+        form.add("type", mimeType);
+        HttpHeaders part = new HttpHeaders();
+        part.setContentType(MediaType.parseMediaType(mimeType));
+        form.add("file", new HttpEntity<>(new org.springframework.core.io.FileSystemResource(file), part));
+        try {
+            ResponseEntity<Map> res = restTemplate.postForEntity(GRAPH + props.getGraphVersion() + "/" + props.getPhoneNumberId() + "/media",
+                    new HttpEntity<>(form, headers), Map.class);
+            Object id = res.getBody() == null ? null : res.getBody().get("id");
+            return id == null ? null : id.toString();
+        } catch (HttpStatusCodeException e) {
+            log.warn("WhatsApp media upload failed ({}): {}", e.getStatusCode().value(), e.getResponseBodyAsString());
+            return null;
+        } catch (Exception e) {
+            log.warn("WhatsApp media upload failed: {}", e.getMessage());
+            return null;
+        }
+    }
+
+    /** Sends an uploaded file as a document, so WhatsApp doesn't compress it. */
+    public Sent sendDocument(String to, String mediaId, String filename, String caption) {
+        Map<String, Object> doc = new LinkedHashMap<>();
+        doc.put("id", mediaId);
+        doc.put("filename", filename);
+        if (caption != null && !caption.isBlank()) doc.put("caption", limit(caption, 1024));
+        return send(to, "document", doc);
+    }
+
     /** Marks the shopper's message as read and shows "typing…" while we work on the reply (max ~25 s). */
     public void markReadAndTyping(String messageId) {
         if (!props.canSend() || messageId == null) return;

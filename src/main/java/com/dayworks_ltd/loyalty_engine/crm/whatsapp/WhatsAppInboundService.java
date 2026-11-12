@@ -56,6 +56,7 @@ public class WhatsAppInboundService {
     private final com.dayworks_ltd.loyalty_engine.crm.whatsapp.shop.WhatsAppReportApproval reportApproval;
     private final com.dayworks_ltd.loyalty_engine.crm.whatsapp.shop.WhatsAppStockReceipt stockReceipt;
     private final com.dayworks_ltd.loyalty_engine.smm.intake.SmmSellerCommands sellerCommands;
+    private final com.dayworks_ltd.loyalty_engine.smm.intake.SmmWatermarkService watermark;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     @SuppressWarnings("unchecked")
@@ -102,6 +103,9 @@ public class WhatsAppInboundService {
             default -> "";
         };
         if (!remember(id, from, profileName, type, content)) return; // a retry of something already handled
+
+        // A SokoReply seller sending a reel to get their till watermark on it, or giving their till (TILL 123456)
+        if (watermark.handle(from, type, content, message)) return;
 
         // A SokoReply seller: PAUSE / RESUME, or the buttons on their alerts and morning summary
         if (sellerCommands.handle(from, type, content)) return;

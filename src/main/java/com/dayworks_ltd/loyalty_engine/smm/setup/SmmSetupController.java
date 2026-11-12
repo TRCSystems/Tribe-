@@ -52,6 +52,7 @@ public class SmmSetupController {
     private final MetaGraphClient graph;
     private final WhatsAppCloudClient whatsapp;
     private final WhatsAppProperties whatsappProps;
+    private final com.dayworks_ltd.loyalty_engine.smm.intake.SmmWatermarkService watermark;
 
     // ───────────────────────────── step 5: shop details ─────────────────────────────
 
@@ -498,6 +499,21 @@ public class SmmSetupController {
             }
         }
         return ok("Submitted to Meta for approval", results);
+    }
+
+    @PostMapping("/admin/till")
+    @Operation(summary = "Record a seller's till after our KES 10 test payment: number + the name exactly as M-Pesa showed it (admin)")
+    public ResponseEntity<?> verifyTill(@AuthenticationPrincipal CustomUserDetails user, @RequestBody Map<String, Object> body) {
+        if (user == null || !"ADMIN".equals(user.getUserRole())) return fail(HttpStatus.FORBIDDEN, "Admins only");
+        Double merchant = number(body.get("merchantId"));
+        if (merchant == null) return fail(HttpStatus.BAD_REQUEST, "merchantId is required");
+        try {
+            SmmSellerProfile p = watermark.verifyTill(merchant.longValue(), text(body, "tillNumber", 20), text(body, "tillName", 100));
+            return ok("Till verified; the seller's videos now get the watermark",
+                    Map.of("merchantId", p.getMerchantId(), "tillNumber", p.getTillNumber(), "tillName", p.getTillName()));
+        } catch (IllegalArgumentException e) {
+            return fail(HttpStatus.BAD_REQUEST, e.getMessage());
+        }
     }
 
     // ───────────────────────────── helpers ─────────────────────────────
