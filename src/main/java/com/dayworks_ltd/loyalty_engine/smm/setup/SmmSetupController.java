@@ -52,7 +52,7 @@ public class SmmSetupController {
     private final MetaGraphClient graph;
     private final WhatsAppCloudClient whatsapp;
     private final WhatsAppProperties whatsappProps;
-    private final com.dayworks_ltd.loyalty_engine.smm.intake.SmmWatermarkService watermark;
+    private final com.dayworks_ltd.loyalty_engine.smm.intake.SmmTillCheckService tillCheck;
 
     // ───────────────────────────── step 5: shop details ─────────────────────────────
 
@@ -502,15 +502,17 @@ public class SmmSetupController {
     }
 
     @PostMapping("/admin/till")
-    @Operation(summary = "Record a seller's till after our KES 1 test payment: number + the name exactly as M-Pesa showed it (admin)")
-    public ResponseEntity<?> verifyTill(@AuthenticationPrincipal CustomUserDetails user, @RequestBody Map<String, Object> body) {
+    @Operation(summary = "Record our hand-made till check payment (when Daraja B2B is off): till, M-Pesa code, amount 1-9, "
+            + "and the name exactly as M-Pesa showed it. The seller then proves ownership by sending back the code and amount (admin)")
+    public ResponseEntity<?> recordTillPayment(@AuthenticationPrincipal CustomUserDetails user, @RequestBody Map<String, Object> body) {
         if (user == null || !"ADMIN".equals(user.getUserRole())) return fail(HttpStatus.FORBIDDEN, "Admins only");
         Double merchant = number(body.get("merchantId"));
         if (merchant == null) return fail(HttpStatus.BAD_REQUEST, "merchantId is required");
         try {
-            SmmSellerProfile p = watermark.verifyTill(merchant.longValue(), text(body, "tillNumber", 20), text(body, "tillName", 100));
-            return ok("Till verified; the seller's videos now get the watermark",
-                    Map.of("merchantId", p.getMerchantId(), "tillNumber", p.getTillNumber(), "tillName", p.getTillName()));
+            SmmSellerProfile p = tillCheck.recordManualPayment(merchant.longValue(), text(body, "tillNumber", 20),
+                    text(body, "mpesaCode", 20), text(body, "amount", 10), text(body, "tillName", 100));
+            return ok("Payment recorded; the seller was asked for the code and amount",
+                    Map.of("merchantId", p.getMerchantId(), "tillNumber", p.getTillNumber(), "tillName", p.getTillCheckName()));
         } catch (IllegalArgumentException e) {
             return fail(HttpStatus.BAD_REQUEST, e.getMessage());
         }

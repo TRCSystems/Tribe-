@@ -108,6 +108,34 @@ public class SmmSellerProfile {
     @Column(name = "till_verified_at")
     private LocalDateTime tillVerifiedAt;
 
+    /*
+     * The till check in progress: we pay a few random shillings into the till, and the seller proves the till is theirs
+     * by sending back the M-Pesa code and amount, which only the till's owner sees.
+     */
+    /** Shillings we paid (1-9). */
+    @Column(name = "till_check_amount")
+    private Integer tillCheckAmount;
+    /** M-Pesa code of our payment; null until M-Pesa confirms it. */
+    @Column(name = "till_check_code", length = 12)
+    private String tillCheckCode;
+    /** The till's public name as M-Pesa reported it on our payment; becomes {@link #tillName} once the seller matches. */
+    @Column(name = "till_check_name", length = 60)
+    private String tillCheckName;
+    @Column(name = "till_check_sent_at")
+    private LocalDateTime tillCheckSentAt;
+    /** Wrong code/amount replies; 3 locks the check until our team calls. */
+    @Column(name = "till_check_tries")
+    private Integer tillCheckTries;
+    /** Automatic (Daraja) payments made for this seller, capped so a seller can't drain the float. */
+    @Column(name = "till_check_payments")
+    private Integer tillCheckPayments;
+    /** Daraja ConversationID of the payment in flight. */
+    @Column(name = "till_check_ref", length = 60)
+    private String tillCheckRef;
+    /** One-time secret in the result URL, so nobody else can post a fake result. */
+    @Column(name = "till_check_token", length = 40)
+    private String tillCheckToken;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private LocalDateTime createdAt;
 

@@ -84,6 +84,8 @@ public class WebSecurityConfig {
                         // SokoReply: Meta calls the webhook (signed); Facebook sends the seller's browser to the callback
                         // (trusts only the signed state); everything else is the shop's own setup
                         .requestMatchers("/api/v1/smm/webhook", "/api/v1/smm/connect/callback").permitAll()
+                        // Safaricom posts our till check payment results here (one-time token in the path)
+                        .requestMatchers(HttpMethod.POST, "/api/v1/smm/till-check/result/*", "/api/v1/smm/till-check/timeout/*").permitAll()
                         .requestMatchers("/api/v1/smm/**").hasAnyRole(UserRole.ADMIN.name(), UserRole.MERCHANT.name())
                         .requestMatchers("/api/v1/invoices/**")
                           // ← Add this line

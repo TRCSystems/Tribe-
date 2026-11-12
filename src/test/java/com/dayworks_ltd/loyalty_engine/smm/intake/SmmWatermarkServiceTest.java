@@ -23,7 +23,9 @@ class SmmWatermarkServiceTest {
 
     SmmSellerProfileRepository profiles = mock(SmmSellerProfileRepository.class);
     WhatsAppCloudClient whatsapp = mock(WhatsAppCloudClient.class);
-    SmmWatermarkService service = new SmmWatermarkService(profiles, whatsapp, "ffmpeg-not-installed", "/fonts/DejaVuSans-Bold.ttf", 600);
+    DarajaB2bClient daraja = mock(DarajaB2bClient.class);
+    SmmTillCheckService tillCheck = new SmmTillCheckService(profiles, whatsapp, daraja);
+    SmmWatermarkService service = new SmmWatermarkService(profiles, whatsapp, tillCheck, "ffmpeg-not-installed", "/fonts/DejaVuSans-Bold.ttf", 600);
 
     SmmSellerProfile seller = SmmSellerProfile.builder().id(1L).merchantId(23L).whatsappNumber("0712 000 111").build();
 
@@ -48,15 +50,15 @@ class SmmWatermarkServiceTest {
     void aTillThatIsNotVerifiedYetGetsNoWatermark() {
         seller.setTillNumber("123456");
         assertTrue(service.handle(SELLER, "video", "", Map.of("video", Map.of("id", "MEDIA1", "mime_type", "video/mp4"))));
-        verify(whatsapp).sendText(eq(SELLER), contains("KES 1 test payment"));
+        verify(whatsapp).sendText(eq(SELLER), contains("still checking your till"));
     }
 
     @Test
     void theTillCommandTakesATillButNotAPhoneNumber() {
         assertTrue(service.handle(SELLER, "text", "Till 123 456", null));
         assertEquals("123456", seller.getTillNumber());
-        assertNull(seller.getTillVerifiedAt(), "only our test payment verifies it");
-        verify(whatsapp).sendText(eq(SELLER), contains("KES 1"));
+        assertNull(seller.getTillVerifiedAt(), "only the code of our payment verifies it");
+        verify(whatsapp).sendText(eq(SELLER), contains("small payment"));
 
         assertTrue(service.handle(SELLER, "text", "TILL 0712345678", null));
         assertEquals("123456", seller.getTillNumber(), "a personal M-Pesa number is not a till");
@@ -69,18 +71,6 @@ class SmmWatermarkServiceTest {
         assertFalse(service.handle(SELLER, "document", "", document("application/pdf", "price-list.pdf")), "not a video");
         assertFalse(service.handle(SELLER, "text", "hello", null));
         assertFalse(service.handle(SELLER, "image", "", Map.of("image", Map.of("id", "X"))));
-    }
-
-    @Test
-    void verifyingTheTillUsesTheMpesaNameAndTellsTheSeller() {
-        SmmSellerProfile p = service.verifyTill(23L, "123 456", "  Jane  W. Enterprises ");
-        assertEquals("JANE W. ENTERPRISES", p.getTillName());
-        assertNotNull(p.getTillVerifiedAt());
-        assertTrue(SmmWatermarkService.canWatermark(p));
-        verify(whatsapp).sendText(eq("0712 000 111"), contains("Pay ONLY to Till 123456"));
-
-        assertThrows(IllegalArgumentException.class, () -> service.verifyTill(23L, "0712345678", "JANE"));
-        assertThrows(IllegalArgumentException.class, () -> service.verifyTill(23L, "123456", " "));
     }
 
     @Test

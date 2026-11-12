@@ -12,7 +12,6 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.time.LocalDateTime;
 import java.util.*;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -30,7 +29,7 @@ import java.util.regex.Pattern;
  * doesn't remove it.
  * <p>
  * Only sellers with their own verified Lipa na M-Pesa till get it: they are always paid into that till, and the name
- * on the watermark is the one M-Pesa shows (taken from a real KES 1 test payment), never the Page name. Sellers with
+ * on the watermark is the one M-Pesa shows (from a small payment we make into the till, see {@link SmmTillCheckService}), never the Page name. Sellers with
  * only a personal M-Pesa number get no watermark.
  * <p>
  * Sellers should send the video as a Document so WhatsApp doesn't compress it before Facebook compresses it again;
@@ -50,6 +49,7 @@ public class SmmWatermarkService {
 
     private final SmmSellerProfileRepository profiles;
     private final WhatsAppCloudClient whatsapp;
+    private final SmmTillCheckService tillCheck;
     private final String ffmpeg;
     private final String font;
     private final int maxSeconds;
@@ -60,12 +60,13 @@ public class SmmWatermarkService {
         return t;
     });
 
-    public SmmWatermarkService(SmmSellerProfileRepository profiles, WhatsAppCloudClient whatsapp,
+    public SmmWatermarkService(SmmSellerProfileRepository profiles, WhatsAppCloudClient whatsapp, SmmTillCheckService tillCheck,
                                @Value("${smm.watermark.ffmpeg:ffmpeg}") String ffmpeg,
                                @Value("${smm.watermark.font:/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf}") String font,
                                @Value("${smm.watermark.max-seconds:600}") int maxSeconds) {
         this.profiles = profiles;
         this.whatsapp = whatsapp;
+        this.tillCheck = tillCheck;
         this.ffmpeg = ffmpeg;
         this.font = font;
         this.maxSeconds = maxSeconds;
@@ -88,7 +89,7 @@ public class SmmWatermarkService {
         if ("text".equals(type) && content != null) {
             Matcher m = TILL_COMMAND.matcher(content.trim());
             if (m.matches()) return tillGiven(from, sellers, m.group(1).replace(" ", ""));
-            return false;
+            return tillCheck.answer(from, sellers, content);
         }
 
         Map<String, Object> media = null;
@@ -126,8 +127,8 @@ public class SmmWatermarkService {
     static String notReady(List<SmmSellerProfile> sellers) {
         boolean waiting = sellers.stream().anyMatch(p -> p.getTillNumber() != null && !p.getTillNumber().isBlank());
         if (waiting) {
-            return "We're still checking your till: our team makes a KES 1 test payment to see the exact name M-Pesa "
-                    + "shows buyers. We'll tell you here as soon as it's done, then send the video again.";
+            return "We're still checking your till. When our small payment arrives on the till, send us its M-Pesa code "
+                    + "and the amount, like this: QK7AB12XYZ 3. Then send the video again.";
         }
         return "The video watermark shows buyers your Lipa na M-Pesa till, so a copycat Page can't redirect your "
                 + "buyers. It's for sellers with a till (not a personal M-Pesa number). If you have one, send TILL and "
@@ -140,17 +141,7 @@ public class SmmWatermarkService {
                     + "for the watermark. Send it like this: TILL 123456");
             return true;
         }
-        for (SmmSellerProfile p : sellers) {
-            if (till.equals(p.getTillNumber()) && p.getTillVerifiedAt() != null) continue;
-            p.setTillNumber(till);
-            p.setTillName(null);
-            p.setTillVerifiedAt(null);
-        }
-        profiles.saveAll(sellers);
-        log.info("SokoReply: till {} given on WhatsApp by merchant(s) {}, waiting for the test payment", till,
-                sellers.stream().map(SmmSellerProfile::getMerchantId).toList());
-        whatsapp.sendText(from, "Thanks ✅ Our team will pay KES 1 into till " + till + " to see the exact name M-Pesa "
-                + "shows buyers. That name goes on your videos. We'll tell you here when it's ready.");
+        tillCheck.tillGiven(from, sellers, till);
         return true;
     }
 
@@ -266,23 +257,4 @@ public class SmmWatermarkService {
         }
     }
 
-    /** Our team confirmed the name on the KES 1 test payment: from now on the seller's videos get the watermark. */
-    public SmmSellerProfile verifyTill(Long merchantId, String tillNumber, String tillName) {
-        SmmSellerProfile p = profiles.findByMerchantId(merchantId).orElseThrow(() -> new IllegalArgumentException("No SokoReply profile for merchant " + merchantId));
-        String till = tillNumber == null ? "" : tillNumber.replaceAll("\\s", "");
-        if (!till.matches("\\d{5,7}")) throw new IllegalArgumentException("A till number has 5 to 7 digits");
-        String name = tillName == null ? "" : tillName.trim().replaceAll("\\s+", " ");
-        if (name.isEmpty() || name.length() > 60) throw new IllegalArgumentException("Give the name exactly as M-Pesa showed it (up to 60 characters)");
-        p.setTillNumber(till);
-        p.setTillName(name.toUpperCase(Locale.ROOT));
-        p.setTillVerifiedAt(LocalDateTime.now(SmmIntakeService.NAIROBI));
-        profiles.save(p);
-        log.info("SokoReply: till {} verified for merchant {}", till, merchantId);
-        if (p.getWhatsappNumber() != null) {
-            whatsapp.sendText(p.getWhatsappNumber(), "✅ Your till is verified: " + till + " · " + p.getTillName() + ".\n\n"
-                    + "Send us any reel as a Document (📎 → Document) and we'll send it back with \"Pay ONLY to Till "
-                    + till + "\" on it. Post that one, so even a copied video points buyers to you.");
-        }
-        return p;
-    }
 }
