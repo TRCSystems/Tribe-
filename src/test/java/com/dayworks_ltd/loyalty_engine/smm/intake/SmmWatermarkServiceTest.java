@@ -25,7 +25,7 @@ class SmmWatermarkServiceTest {
     WhatsAppCloudClient whatsapp = mock(WhatsAppCloudClient.class);
     DarajaB2bClient daraja = mock(DarajaB2bClient.class);
     SmmTillCheckService tillCheck = new SmmTillCheckService(profiles, whatsapp, daraja, true);
-    SmmWatermarkService service = new SmmWatermarkService(profiles, whatsapp, tillCheck, "ffmpeg-not-installed", "/fonts/DejaVuSans-Bold.ttf", 600);
+    SmmWatermarkService service = new SmmWatermarkService(profiles, whatsapp, tillCheck, "ffmpeg-not-installed", "/fonts/DejaVuSans-Bold.ttf", 600, true);
 
     SmmSellerProfile seller = SmmSellerProfile.builder().id(1L).merchantId(23L).whatsappNumber("0712 000 111").build();
 
@@ -71,6 +71,22 @@ class SmmWatermarkServiceTest {
         assertFalse(service.handle(SELLER, "document", "", document("application/pdf", "price-list.pdf")), "not a video or photo");
         assertFalse(service.handle(SELLER, "text", "hello", null));
         assertFalse(service.handle(SELLER, "audio", "", Map.of("audio", Map.of("id", "X"))), "not a type we watermark");
+    }
+
+    @Test
+    void theKillSwitchLetsPhotosAndVideosThroughToOtherRoutingButLeavesTillCommandsWorking() {
+        SmmWatermarkService paused = new SmmWatermarkService(profiles, whatsapp, tillCheck, "ffmpeg-not-installed", "/fonts/DejaVuSans-Bold.ttf", 600, false);
+        seller.setTillNumber("123456");
+        seller.setTillName("Jane W. Enterprises");
+        seller.setTillVerifiedAt(LocalDateTime.now());
+
+        assertFalse(paused.handle(SELLER, "video", "", Map.of("video", Map.of("id", "MEDIA1", "mime_type", "video/mp4"))),
+                "a ready seller's video still routes on while paused");
+        assertFalse(paused.handle(SELLER, "image", "", Map.of("image", Map.of("id", "MEDIA1", "mime_type", "image/jpeg"))),
+                "and so does a photo");
+        verify(whatsapp, never()).sendText(eq(SELLER), contains("Got it"));
+
+        assertTrue(paused.handle(SELLER, "text", "TILL 123456", null), "TILL commands keep working while media is paused");
     }
 
     @Test

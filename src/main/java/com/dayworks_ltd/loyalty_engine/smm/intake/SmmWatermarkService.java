@@ -56,6 +56,12 @@ public class SmmWatermarkService {
     private final String ffmpeg;
     private final String font;
     private final int maxSeconds;
+    /**
+     * Kill switch for the photo/video path only: a seller's WhatsApp number can double as an ordering line for
+     * something else (e.g. ASANO's liquor B2B demo), and a buyer's photo/video there was being swallowed by this
+     * service instead of reaching order-taking. TILL text commands and the till-check answer are unaffected.
+     */
+    private final boolean mediaEnabled;
     /** One video at a time: the server has three cores and the comment agents need them too. */
     private final ExecutorService worker = Executors.newSingleThreadExecutor(r -> {
         Thread t = new Thread(r, "smm-watermark");
@@ -66,13 +72,15 @@ public class SmmWatermarkService {
     public SmmWatermarkService(SmmSellerProfileRepository profiles, WhatsAppCloudClient whatsapp, SmmTillCheckService tillCheck,
                                @Value("${smm.watermark.ffmpeg:ffmpeg}") String ffmpeg,
                                @Value("${smm.watermark.font:/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf}") String font,
-                               @Value("${smm.watermark.max-seconds:600}") int maxSeconds) {
+                               @Value("${smm.watermark.max-seconds:600}") int maxSeconds,
+                               @Value("${smm.watermark.media-enabled:true}") boolean mediaEnabled) {
         this.profiles = profiles;
         this.whatsapp = whatsapp;
         this.tillCheck = tillCheck;
         this.ffmpeg = ffmpeg;
         this.font = font;
         this.maxSeconds = maxSeconds;
+        this.mediaEnabled = mediaEnabled;
     }
 
     @PreDestroy
@@ -99,6 +107,7 @@ public class SmmWatermarkService {
             if (m.matches()) return tillGiven(from, sellers, m.group(1).replace(" ", ""));
             return tillCheck.answer(from, sellers, content);
         }
+        if (!mediaEnabled) return false;
 
         Map<String, Object> media = null;
         boolean asDocument = false;
