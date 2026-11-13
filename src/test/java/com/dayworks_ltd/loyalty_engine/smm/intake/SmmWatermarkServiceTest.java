@@ -24,7 +24,7 @@ class SmmWatermarkServiceTest {
     SmmSellerProfileRepository profiles = mock(SmmSellerProfileRepository.class);
     WhatsAppCloudClient whatsapp = mock(WhatsAppCloudClient.class);
     DarajaB2bClient daraja = mock(DarajaB2bClient.class);
-    SmmTillCheckService tillCheck = new SmmTillCheckService(profiles, whatsapp, daraja);
+    SmmTillCheckService tillCheck = new SmmTillCheckService(profiles, whatsapp, daraja, true);
     SmmWatermarkService service = new SmmWatermarkService(profiles, whatsapp, tillCheck, "ffmpeg-not-installed", "/fonts/DejaVuSans-Bold.ttf", 600);
 
     SmmSellerProfile seller = SmmSellerProfile.builder().id(1L).merchantId(23L).whatsappNumber("0712 000 111").build();

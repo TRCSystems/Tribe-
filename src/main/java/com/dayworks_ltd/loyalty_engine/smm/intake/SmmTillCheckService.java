@@ -4,6 +4,7 @@ import com.dayworks_ltd.loyalty_engine.crm.whatsapp.WhatsAppCloudClient;
 import com.dayworks_ltd.loyalty_engine.smm.model.SmmSellerProfile;
 import com.dayworks_ltd.loyalty_engine.smm.repository.SmmSellerProfileRepository;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
@@ -25,6 +26,10 @@ import java.util.regex.Pattern;
  * </ol>
  * A screenshot or a pasted confirmation from the seller's own payment proves nothing (anyone can pay any till); only
  * the till's owner can see the code of a payment we made.
+ * <p>
+ * The automatic (Daraja) payment stays off even once configured until {@code smm.till-check.auto-pay=true} is set:
+ * a kill switch separate from the credentials, so a seller's 3 automatic tries aren't burnt on calls we already know
+ * will fail (no funds, or Safaricom hasn't finished turning on the endpoint) before anyone has confirmed one works.
  */
 @Slf4j
 @Service
@@ -43,12 +48,21 @@ public class SmmTillCheckService {
     private final SmmSellerProfileRepository profiles;
     private final WhatsAppCloudClient whatsapp;
     private final DarajaB2bClient daraja;
+    /**
+     * Kill switch, separate from whether Daraja is configured: defaults OFF, so a server that already has B2B
+     * credentials set (e.g. while Safaricom is still sorting out funding or endpoint access) doesn't burn a seller's
+     * automatic-payment attempts on a call we know will fail. Set {@code smm.till-check.auto-pay=true} once a real
+     * payment has gone through.
+     */
+    private final boolean autoPayEnabled;
     private final Random random = new SecureRandom();
 
-    public SmmTillCheckService(SmmSellerProfileRepository profiles, WhatsAppCloudClient whatsapp, DarajaB2bClient daraja) {
+    public SmmTillCheckService(SmmSellerProfileRepository profiles, WhatsAppCloudClient whatsapp, DarajaB2bClient daraja,
+                               @Value("${smm.till-check.auto-pay:false}") boolean autoPayEnabled) {
         this.profiles = profiles;
         this.whatsapp = whatsapp;
         this.daraja = daraja;
+        this.autoPayEnabled = autoPayEnabled;
     }
 
     static LocalDateTime now() {
@@ -69,7 +83,7 @@ public class SmmTillCheckService {
             return;
         }
         int paymentsSoFar = sellers.stream().mapToInt(p -> nz(p.getTillCheckPayments())).max().orElse(0);
-        boolean automatic = daraja.enabled() && paymentsSoFar < MAX_PAYMENTS;
+        boolean automatic = autoPayEnabled && daraja.enabled() && paymentsSoFar < MAX_PAYMENTS;
         int amount = 1 + random.nextInt(9);
         String token = automatic ? UUID.randomUUID().toString().replace("-", "") : null;
         for (SmmSellerProfile p : sellers) {
@@ -104,7 +118,7 @@ public class SmmTillCheckService {
             for (SmmSellerProfile p : sellers) p.setTillCheckToken(null);
             profiles.saveAll(sellers);
             log.warn("SokoReply: automatic till check to {} for merchant(s) {} failed; our team pays by hand", till, merchants);
-        } else if (daraja.enabled()) {
+        } else if (autoPayEnabled && daraja.enabled()) {
             log.warn("SokoReply: merchant(s) {} reached {} automatic till payments; our team pays by hand", merchants, MAX_PAYMENTS);
         } else {
             log.info("SokoReply: till {} given by merchant(s) {}; waiting for our team's test payment", till, merchants);

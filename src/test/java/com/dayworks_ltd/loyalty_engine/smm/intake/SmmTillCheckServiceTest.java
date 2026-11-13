@@ -23,7 +23,7 @@ class SmmTillCheckServiceTest {
     SmmSellerProfileRepository profiles = mock(SmmSellerProfileRepository.class);
     WhatsAppCloudClient whatsapp = mock(WhatsAppCloudClient.class);
     DarajaB2bClient daraja = mock(DarajaB2bClient.class);
-    SmmTillCheckService service = new SmmTillCheckService(profiles, whatsapp, daraja);
+    SmmTillCheckService service = new SmmTillCheckService(profiles, whatsapp, daraja, true);
 
     SmmSellerProfile seller = SmmSellerProfile.builder().id(1L).merchantId(23L).whatsappNumber("0712 000 111").build();
     List<SmmSellerProfile> sellers = List.of(seller);
@@ -161,6 +161,16 @@ class SmmTillCheckServiceTest {
         service.tillGiven(SELLER, sellers, "123456");
         assertNull(seller.getTillCheckToken());
         verify(whatsapp, times(2)).sendText(eq(SELLER), contains("Our team will send a small payment"));
+    }
+
+    @Test
+    void theKillSwitchStopsAutomaticPaymentsEvenWhenDarajaIsConfigured() {
+        SmmTillCheckService guarded = new SmmTillCheckService(profiles, whatsapp, daraja, false);
+        when(daraja.enabled()).thenReturn(true);
+        guarded.tillGiven(SELLER, sellers, "123456");
+        verify(daraja, never()).pay(any(), anyInt(), any());
+        verify(whatsapp).sendText(eq(SELLER), contains("Our team will send a small payment"));
+        verify(whatsapp, never()).sendText(eq(SELLER), contains("We're sending a small payment"));
     }
 
     @Test
