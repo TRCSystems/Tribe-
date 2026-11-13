@@ -11,6 +11,7 @@ import com.dayworks_ltd.loyalty_engine.smm.comments.CommentReplyPlanner.Plan;
 import com.dayworks_ltd.loyalty_engine.smm.comments.ReplyWriter;
 import com.dayworks_ltd.loyalty_engine.smm.meta.MetaGraphClient;
 import com.dayworks_ltd.loyalty_engine.smm.model.*;
+import com.dayworks_ltd.loyalty_engine.smm.order.SmmOrderLinkService;
 import com.dayworks_ltd.loyalty_engine.smm.repository.*;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -48,6 +49,7 @@ public class SmmCommentWorker {
     private final ReplyWriter writer;
     private final SmmFaqRepository faqs;
     private final SmmLeadAlertService leadAlerts;
+    private final SmmOrderLinkService orderLinks;
 
     /** A viral post is handled at most this many comments a minute; other posts go ahead meanwhile. */
     @Value("${smm.worker.per-post-per-minute:30}")
@@ -110,7 +112,7 @@ public class SmmCommentWorker {
         SmmAccount account = accounts.findById(c.getAccountId()).orElse(null);
         Duration age = c.getCommentCreatedAt() == null ? Duration.ZERO
                 : Duration.between(c.getCommentCreatedAt(), LocalDateTime.now(SmmIntakeService.NAIROBI));
-        Plan plan = CommentReplyPlanner.plan(text, reading, items, shop(profile, account), age);
+        Plan plan = CommentReplyPlanner.plan(text, reading, items, shop(profile, account, c.getPostId(), items, reading), age);
         // Answered already (by the seller, or the same person said the same thing a moment ago): no second reply,
         // but a phone number or a bad comment is still hidden
         if (Boolean.TRUE.equals(c.getSellerAnswered()) || repeat) plan = alreadyAnswered(plan);
@@ -152,7 +154,7 @@ public class SmmCommentWorker {
                 if (r.getText() != null) recent.add(r.getText().length() > 160 ? r.getText().substring(0, 160) : r.getText());
             });
         }
-        CommentReplyPlanner.Shop shop = shop(p, account);
+        CommentReplyPlanner.Shop shop = shop(p, account, c.getPostId(), itemsOnPost(c), reading);
         StringBuilder facts = new StringBuilder();
         if (shop.location() != null) facts.append("Location: ").append(shop.location()).append(". ");
         if (shop.landmark() != null) facts.append("Directions: ").append(shop.landmark()).append(". ");
@@ -311,11 +313,45 @@ public class SmmCommentWorker {
         return s.isEmpty() ? null : s;
     }
 
-    private static CommentReplyPlanner.Shop shop(SmmSellerProfile p, SmmAccount account) {
+    /**
+     * orderLink opens the SokoReply order page for this Reel (same link for every commenter on it, created once);
+     * whatsappLink carries the matched item pre-typed, the way the plan describes ("Hi, nataka suitcase 20kg white
+     * @1,500"), so the seller sees exactly what the buyer wants without typing it themselves.
+     */
+    private CommentReplyPlanner.Shop shop(SmmSellerProfile p, SmmAccount account, String postId, List<Item> items, Reading reading) {
         String name = account == null || account.getPageName() == null ? "our shop" : account.getPageName().replaceFirst("^@", "");
-        String wa = p.getWhatsappNumber() == null || p.getWhatsappNumber().isBlank() ? null
+        String waBase = p.getWhatsappNumber() == null || p.getWhatsappNumber().isBlank() ? null
                 : "https://wa.me/" + p.getWhatsappNumber().replaceAll("\\D", "").replaceFirst("^0", "254");
-        return new CommentReplyPlanner.Shop(name, p.getLocationText(), null, wa, p.getLandmarkDirections(), p.getOpeningHours());
+        String wa = waBase == null ? null : waBase + preTypedQuery(matchedItem(items, reading));
+        String orderLink = items.isEmpty() || postId == null ? null : orderLinkFor(p.getMerchantId(), postId);
+        return new CommentReplyPlanner.Shop(name, p.getLocationText(), orderLink, wa, p.getLandmarkDirections(), p.getOpeningHours());
+    }
+
+    private String orderLinkFor(Long merchantId, String postId) {
+        try {
+            return orderLinks.getOrCreate(merchantId, postId).url();
+        } catch (Exception e) {
+            log.warn("SokoReply: couldn't build an order link for post {}: {}", postId, e.getMessage());
+            return null;
+        }
+    }
+
+    /** The item the comment is about, when it's clear: what the Reader matched, or the post's only item. */
+    static Item matchedItem(List<Item> items, Reading reading) {
+        if (items.isEmpty()) return null;
+        if (reading != null && reading.productCode() != null) {
+            for (Item i : items) if (i.productCode().equals(reading.productCode())) return i;
+        }
+        return items.size() == 1 ? items.get(0) : null;
+    }
+
+    static String preTypedQuery(Item item) {
+        if (item == null) return "";
+        StringBuilder sb = new StringBuilder("Hi, nataka ").append(item.name());
+        if (item.colour() != null) sb.append(' ').append(item.colour());
+        if (item.size() != null) sb.append(" size ").append(item.size());
+        if (item.price() != null) sb.append(" @ KES ").append(item.price().stripTrailingZeros().toPlainString());
+        return "?text=" + java.net.URLEncoder.encode(sb.toString(), java.nio.charset.StandardCharsets.UTF_8);
     }
 
     private static String firstPhone(String text) {

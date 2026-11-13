@@ -86,6 +86,8 @@ public class WebSecurityConfig {
                         .requestMatchers("/api/v1/smm/webhook", "/api/v1/smm/connect/callback").permitAll()
                         // Safaricom posts our till check payment results here (one-time token in the path)
                         .requestMatchers(HttpMethod.POST, "/api/v1/smm/till-check/result/*", "/api/v1/smm/till-check/timeout/*").permitAll()
+                        // SokoReply order page: opened by a buyer from a comment reply, no login
+                        .requestMatchers("/api/v1/smm/order/**").permitAll()
                         .requestMatchers("/api/v1/smm/**").hasAnyRole(UserRole.ADMIN.name(), UserRole.MERCHANT.name())
                         .requestMatchers("/api/v1/invoices/**")
                           // ← Add this line
