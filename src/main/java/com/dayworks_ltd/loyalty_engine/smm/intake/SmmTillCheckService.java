@@ -168,6 +168,39 @@ public class SmmTillCheckService {
         return p;
     }
 
+    /**
+     * Admin override, skipping the ownership proof entirely: for our own team to test the watermark quickly on a
+     * till we already know is real, e.g. our own. Never use this on a seller's own claimed till — that's exactly
+     * the "a screenshot proves nothing" problem this whole check exists to solve.
+     */
+    public SmmSellerProfile verifyNow(Long merchantId, String tillNumber, String tillName) {
+        SmmSellerProfile p = profiles.findByMerchantId(merchantId)
+                .orElseThrow(() -> new IllegalArgumentException("No SokoReply profile for merchant " + merchantId));
+        String till = tillNumber == null ? "" : tillNumber.replaceAll("\\s", "");
+        if (!till.matches("\\d{5,7}")) throw new IllegalArgumentException("A till number has 5 to 7 digits");
+        String name = cleanName(tillName);
+        if (name.isEmpty() || name.length() > 60) throw new IllegalArgumentException("Give the name exactly as M-Pesa showed it (up to 60 characters)");
+
+        p.setTillNumber(till);
+        p.setTillName(name);
+        p.setTillVerifiedAt(now());
+        p.setTillCheckAmount(null);
+        p.setTillCheckCode(null);
+        p.setTillCheckName(null);
+        p.setTillCheckTries(0);
+        p.setTillCheckSentAt(null);
+        p.setTillCheckRef(null);
+        p.setTillCheckToken(null);
+        profiles.save(p);
+        log.warn("SokoReply: till {} verified WITHOUT the ownership proof for merchant {} (admin override, for testing)", till, merchantId);
+        if (p.getWhatsappNumber() != null) {
+            whatsapp.sendText(p.getWhatsappNumber(), "✅ Your till is verified: " + till + " · " + p.getTillName() + ".\n\n"
+                    + "Send us any reel or photo as a Document (📎 → Document) and we'll send it back with \"Pay ONLY to Till "
+                    + till + "\" on it. Post that one, so even a copied post points buyers to you.");
+        }
+        return p;
+    }
+
     /** Daraja's result for our payment. Only accepted with the one-time token and the matching ConversationID. */
     @SuppressWarnings("unchecked")
     public void paymentResult(String token, Map<String, Object> body) {

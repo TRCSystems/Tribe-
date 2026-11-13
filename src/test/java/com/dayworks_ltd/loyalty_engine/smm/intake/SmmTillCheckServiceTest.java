@@ -200,6 +200,19 @@ class SmmTillCheckServiceTest {
     }
 
     @Test
+    void anAdminOverrideVerifiesInstantlyWithNoProofAtAllForOurOwnQuickTesting() {
+        assertThrows(IllegalArgumentException.class, () -> service.verifyNow(23L, "0712345678", "JANE"));
+        assertThrows(IllegalArgumentException.class, () -> service.verifyNow(23L, "123456", " "));
+
+        SmmSellerProfile p = service.verifyNow(23L, "123 456", "  Jane W. Enterprises ");
+        assertEquals("123456", p.getTillNumber());
+        assertEquals("JANE W. ENTERPRISES", p.getTillName());
+        assertNotNull(p.getTillVerifiedAt(), "instantly verified, no code or amount needed");
+        assertTrue(SmmWatermarkService.canWatermark(p));
+        verify(whatsapp).sendText(eq("0712 000 111"), contains("Your till is verified: 123456"));
+    }
+
+    @Test
     void amountsAndNamesAreReadTheWayMpesaWritesThem() {
         assertEquals(0, new BigDecimal("3").compareTo(SmmTillCheckService.amount(" CONFIRMED. KSH3.00 RECEIVED ON 12/11/26 AT 3:45 PM")));
         assertEquals(0, new BigDecimal("7").compareTo(SmmTillCheckService.amount(" 7")));

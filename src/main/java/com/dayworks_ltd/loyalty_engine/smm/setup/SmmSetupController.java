@@ -518,6 +518,22 @@ public class SmmSetupController {
         }
     }
 
+    @PostMapping("/admin/till/verify-now")
+    @Operation(summary = "Verify a till immediately, skipping the ownership proof: for our own team to test the "
+            + "watermark quickly on a till we already know is real. Never use this on a seller's own claimed till (admin)")
+    public ResponseEntity<?> verifyTillNow(@AuthenticationPrincipal CustomUserDetails user, @RequestBody Map<String, Object> body) {
+        if (user == null || !"ADMIN".equals(user.getUserRole())) return fail(HttpStatus.FORBIDDEN, "Admins only");
+        Double merchant = number(body.get("merchantId"));
+        if (merchant == null) return fail(HttpStatus.BAD_REQUEST, "merchantId is required");
+        try {
+            SmmSellerProfile p = tillCheck.verifyNow(merchant.longValue(), text(body, "tillNumber", 20), text(body, "tillName", 100));
+            return ok("Till verified (no proof); the seller's next photo or video now gets the watermark",
+                    Map.of("merchantId", p.getMerchantId(), "tillNumber", p.getTillNumber(), "tillName", p.getTillName()));
+        } catch (IllegalArgumentException e) {
+            return fail(HttpStatus.BAD_REQUEST, e.getMessage());
+        }
+    }
+
     // ───────────────────────────── helpers ─────────────────────────────
 
     private static String blankToNull(String s) {
