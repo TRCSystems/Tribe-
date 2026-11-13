@@ -68,9 +68,29 @@ class SmmWatermarkServiceTest {
     @Test
     void otherPeopleAndOtherFilesGoOnToTheUsualRouting() {
         assertFalse(service.handle("254799999999", "document", "", document("video/mp4", "a.mp4")), "not a seller");
-        assertFalse(service.handle(SELLER, "document", "", document("application/pdf", "price-list.pdf")), "not a video");
+        assertFalse(service.handle(SELLER, "document", "", document("application/pdf", "price-list.pdf")), "not a video or photo");
         assertFalse(service.handle(SELLER, "text", "hello", null));
-        assertFalse(service.handle(SELLER, "image", "", Map.of("image", Map.of("id", "X"))));
+        assertFalse(service.handle(SELLER, "audio", "", Map.of("audio", Map.of("id", "X"))), "not a type we watermark");
+    }
+
+    @Test
+    void aSellerWithoutATillIsToldWhatItIsForOnAPhotoToo() {
+        assertTrue(service.handle(SELLER, "image", "", Map.of("image", Map.of("id", "MEDIA1", "mime_type", "image/jpeg"))));
+        verify(whatsapp).sendText(eq(SELLER), contains("TILL 123456"));
+        verify(whatsapp, never()).downloadMediaToFile(any(), any(), anyLong());
+    }
+
+    @Test
+    void aReadySellersPhotoGetsThePhotoWordingNotTheVideoOne() {
+        seller.setTillNumber("123456");
+        seller.setTillName("Jane W. Enterprises");
+        seller.setTillVerifiedAt(LocalDateTime.now());
+
+        assertTrue(service.handle(SELLER, "image", "", Map.of("image", Map.of("id", "MEDIA1", "mime_type", "image/jpeg"))));
+        verify(whatsapp).sendText(eq(SELLER), contains("photo"));
+        verify(whatsapp, never()).sendText(eq(SELLER), contains("the video"));
+
+        assertTrue(service.handle(SELLER, "document", "", document("image/jpeg", "poster.jpg")), "a photo sent as a Document is still a photo");
     }
 
     @Test
@@ -95,5 +115,18 @@ class SmmWatermarkServiceTest {
         assertTrue(vf.contains("fontfile='C\\:/fonts/DejaVu.ttf'"), "paths escaped for the filter");
         assertTrue(cmd.contains("libx264") && cmd.contains("+faststart"));
         assertEquals("/tmp/wm/out.mp4", cmd.get(cmd.size() - 1).replace('\\', '/'));
+    }
+
+    @Test
+    void aPhotoGetsBothSpotsAtOnceSinceThereIsNoTimeToJumpBetweenThem() {
+        List<Path> files = List.of(Path.of("/tmp/wm/line0.txt"), Path.of("/tmp/wm/line1.txt"), Path.of("/tmp/wm/line2.txt"));
+        List<String> cmd = SmmWatermarkService.imageCommand("ffmpeg", Path.of("/tmp/wm/in.img"), Path.of("/tmp/wm/out.jpg"),
+                files, "C:\\fonts\\DejaVu.ttf", 28);
+        String vf = cmd.get(cmd.indexOf("-vf") + 1);
+        assertEquals(6, vf.split("drawtext=").length - 1, "all 3 lines, burnt in at both the upper and the middle spot");
+        assertTrue(vf.contains("h*0.14") && vf.contains("h*0.40"));
+        assertFalse(vf.contains("mod(t"), "a still photo never jumps between the two spots");
+        assertTrue(cmd.contains("-frames:v") && cmd.contains("1"), "exactly one frame out");
+        assertEquals("/tmp/wm/out.jpg", cmd.get(cmd.size() - 1).replace('\\', '/'));
     }
 }

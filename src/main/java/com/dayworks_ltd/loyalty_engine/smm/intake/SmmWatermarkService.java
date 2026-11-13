@@ -32,8 +32,11 @@ import java.util.regex.Pattern;
  * on the watermark is the one M-Pesa shows (from a small payment we make into the till, see {@link SmmTillCheckService}), never the Page name. Sellers with
  * only a personal M-Pesa number get no watermark.
  * <p>
- * Sellers should send the video as a Document so WhatsApp doesn't compress it before Facebook compresses it again;
- * it comes back as a Document too.
+ * Still photos get the same two lines of text, but burnt in at both the upper and the middle spot at once (a photo
+ * has no time to jump between them), since most SokoReply posts are photos, not reels.
+ * <p>
+ * Sellers should send the video or photo as a Document so WhatsApp doesn't compress it before Facebook compresses it
+ * again; it comes back as a Document too.
  */
 @Slf4j
 @Service
@@ -77,7 +80,12 @@ public class SmmWatermarkService {
         worker.shutdownNow();
     }
 
-    /** True when the message was a seller's video, or their TILL command, and has been dealt with here. */
+    /** Image extensions a Document might carry instead of a proper mime type. */
+    static final Pattern IMAGE_EXT = Pattern.compile(".*\\.(jpe?g|png|webp)$");
+    /** Video extensions a Document might carry instead of a proper mime type. */
+    static final Pattern VIDEO_EXT = Pattern.compile(".*\\.(mp4|mov|m4v|3gp|webm|mkv)$");
+
+    /** True when the message was a seller's video or photo, or their TILL command, and has been dealt with here. */
     @SuppressWarnings("unchecked")
     public boolean handle(String from, String type, String content, Map<String, Object> message) {
         String wa = WhatsAppCloudClient.toWaNumber(from);
@@ -94,14 +102,21 @@ public class SmmWatermarkService {
 
         Map<String, Object> media = null;
         boolean asDocument = false;
+        boolean isImage = false;
         if ("video".equals(type) && message != null && message.get("video") instanceof Map<?, ?> v) {
             media = (Map<String, Object>) v;
+        } else if ("image".equals(type) && message != null && message.get("image") instanceof Map<?, ?> im) {
+            media = (Map<String, Object>) im;
+            isImage = true;
         } else if ("document".equals(type) && message != null && message.get("document") instanceof Map<?, ?> d) {
             media = (Map<String, Object>) d;
             asDocument = true;
             String mime = String.valueOf(media.get("mime_type"));
             String name = String.valueOf(media.get("filename")).toLowerCase(Locale.ROOT);
-            if (!mime.startsWith("video/") && !name.matches(".*\\.(mp4|mov|m4v|3gp|webm|mkv)$")) return false;
+            boolean video = mime.startsWith("video/") || VIDEO_EXT.matcher(name).matches();
+            boolean image = mime.startsWith("image/") || IMAGE_EXT.matcher(name).matches();
+            if (!video && !image) return false;
+            isImage = image;
         }
         if (media == null || media.get("id") == null) return false;
 
@@ -112,8 +127,14 @@ public class SmmWatermarkService {
         }
         String mediaId = media.get("id").toString();
         boolean document = asDocument;
-        whatsapp.sendText(from, "Got it ⏳ Adding your till to the video. This takes a minute or two; we'll send it back here.");
-        worker.submit(() -> process(from, seller, mediaId, document));
+        boolean image = isImage;
+        whatsapp.sendText(from, image
+                ? "Got it ⏳ Adding your till to the photo. We'll send it back here in a moment."
+                : "Got it ⏳ Adding your till to the video. This takes a minute or two; we'll send it back here.");
+        worker.submit(() -> {
+            if (image) processImage(from, seller, mediaId, document);
+            else process(from, seller, mediaId, document);
+        });
         return true;
     }
 
@@ -128,11 +149,11 @@ public class SmmWatermarkService {
         boolean waiting = sellers.stream().anyMatch(p -> p.getTillNumber() != null && !p.getTillNumber().isBlank());
         if (waiting) {
             return "We're still checking your till. When our small payment arrives on the till, send us its M-Pesa code "
-                    + "and the amount, like this: QK7AB12XYZ 3. Then send the video again.";
+                    + "and the amount, like this: QK7AB12XYZ 3. Then send the photo or video again.";
         }
-        return "The video watermark shows buyers your Lipa na M-Pesa till, so a copycat Page can't redirect your "
-                + "buyers. It's for sellers with a till (not a personal M-Pesa number). If you have one, send TILL and "
-                + "the number, for example: TILL 123456";
+        return "The watermark shows buyers your Lipa na M-Pesa till on your photos and videos, so a copycat Page can't "
+                + "redirect your buyers. It's for sellers with a till (not a personal M-Pesa number). If you have one, "
+                + "send TILL and the number, for example: TILL 123456";
     }
 
     private boolean tillGiven(String from, List<SmmSellerProfile> sellers, String till) {
@@ -195,6 +216,80 @@ public class SmmWatermarkService {
         } finally {
             deleteQuietly(dir);
         }
+    }
+
+    // ───────────────────────────── the photo ─────────────────────────────
+
+    private void processImage(String to, SmmSellerProfile seller, String mediaId, boolean sentAsDocument) {
+        Path dir = null;
+        try {
+            dir = Files.createTempDirectory("smm-wm-");
+            Path in = dir.resolve("in.img");
+            Path out = dir.resolve("out.jpg");
+            if (whatsapp.downloadMediaToFile(mediaId, in, MAX_BYTES) == null) {
+                whatsapp.sendText(to, "Sorry, we couldn't download that photo. Please try again.");
+                return;
+            }
+            List<String> lines = lines(seller);
+            List<Path> lineFiles = new ArrayList<>();
+            for (int i = 0; i < lines.size(); i++) {
+                Path f = dir.resolve("line" + i + ".txt");
+                Files.writeString(f, lines.get(i), StandardCharsets.UTF_8);
+                lineFiles.add(f);
+            }
+            List<String> cmd = imageCommand(ffmpeg, in, out, lineFiles, font, longest(lines));
+            Path errors = dir.resolve("ffmpeg.log");
+            Process p = new ProcessBuilder(cmd).redirectErrorStream(true).redirectOutput(errors.toFile()).start();
+            if (!p.waitFor(2, TimeUnit.MINUTES)) {
+                p.destroyForcibly();
+                throw new IOException("ffmpeg took too long");
+            }
+            if (p.exitValue() != 0 || !Files.exists(out) || Files.size(out) == 0) {
+                throw new IOException("ffmpeg failed (" + p.exitValue() + "): " + tail(errors));
+            }
+            if (Files.size(out) > MAX_BYTES) {
+                whatsapp.sendText(to, "Sorry, that photo came out too big to send back on WhatsApp. Please try again.");
+                return;
+            }
+            String id = whatsapp.uploadMedia(out, "image/jpeg");
+            if (id == null) throw new IOException("upload to WhatsApp failed");
+            String caption = "✅ Post this one. Every buyer who sees it, even on a copied photo, is told: pay ONLY to till "
+                    + seller.getTillNumber() + " · " + seller.getTillName() + "."
+                    + (sentAsDocument ? "" : "\n\nTip: next time send the photo as a Document (📎 → Document) so WhatsApp "
+                    + "doesn't shrink it first.");
+            WhatsAppCloudClient.Sent sent = whatsapp.sendDocument(to, id, "post-till-" + seller.getTillNumber() + ".jpg", caption);
+            log.info("SokoReply: watermarked photo for merchant {} ({} bytes) sent: {}", seller.getMerchantId(),
+                    Files.size(out), sent.ok() ? sent.messageId() : sent.error());
+        } catch (Exception e) {
+            log.warn("SokoReply: photo watermark for merchant {} failed: {}", seller.getMerchantId(), e.getMessage());
+            whatsapp.sendText(to, "Sorry, we couldn't add the watermark to that photo. Please try again in a few minutes.");
+        } finally {
+            deleteQuietly(dir);
+        }
+    }
+
+    /**
+     * The ffmpeg command for a still photo: the same two lines of text, burnt in at both the upper and the middle
+     * spot at once, since a single frame has no time to jump between them the way a video does.
+     */
+    static List<String> imageCommand(String ffmpeg, Path in, Path out, List<Path> lineFiles, String font, int longestLine) {
+        String size = "min(h/30\\,w*0.9/(0.62*" + Math.max(longestLine, 10) + "))";
+        StringBuilder vf = new StringBuilder();
+        for (String yFraction : new String[]{"0.14", "0.40"}) {
+            for (int i = 0; i < lineFiles.size(); i++) {
+                if (vf.length() > 0) vf.append(",");
+                String y = "h*" + yFraction + "+" + i + "*1.55*" + size;
+                vf.append("drawtext=fontfile='").append(escape(font)).append("':textfile='").append(escape(lineFiles.get(i).toString()))
+                        .append("':fontsize='").append(size).append("':fontcolor=white")
+                        .append(":box=1:boxcolor=black@0.6:boxborderw=12")
+                        .append(":x=(w-text_w)/2:y='").append(y).append("'");
+            }
+        }
+        return List.of(ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
+                "-i", in.toString(),
+                "-vf", vf.toString(),
+                "-frames:v", "1", "-q:v", "3",
+                out.toString());
     }
 
     /** What the buyer reads: an instruction, not just a label, matching the line in the agents' replies. */
