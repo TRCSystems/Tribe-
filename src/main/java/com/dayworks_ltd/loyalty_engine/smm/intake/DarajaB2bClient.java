@@ -21,9 +21,9 @@ import java.util.Map;
  * (sent to {@code /api/v1/smm/till-check/result/{token}}) carries the M-Pesa code and the till's public name, which is
  * what we put on the seller's videos.
  * <p>
- * Off until {@code mpesa.b2b.initiator} and {@code mpesa.b2b.security-credential} are set (the API operator created on
- * the M-Pesa org portal, and its password encrypted with Safaricom's certificate). Uses the same Daraja app
- * ({@code mpesa.consumerkey/consumersecret}) as STK Push once Business Buy Goods is added to it.
+ * Off until {@code mpesa.b2b.consumer-key/consumer-secret} (the production Daraja app with the B2B product),
+ * {@code mpesa.b2b.shortcode}, {@code mpesa.b2b.initiator} (the API operator on the M-Pesa org portal) and
+ * {@code mpesa.b2b.security-credential} (its password encrypted with Safaricom's production certificate) are set.
  */
 @Slf4j
 @Component
@@ -41,31 +41,35 @@ public class DarajaB2bClient {
     private final HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(15)).build();
     private final ObjectMapper json = new ObjectMapper();
 
-    public DarajaB2bClient(@Value("${mpesa.consumerkey:}") String consumerKey,
-                           @Value("${mpesa.consumersecret:}") String consumerSecret,
-                           @Value("${mpesa.auth-url:}") String authUrl,
-                           @Value("${mpesa.b2b.shortcode:${mpesa.shortcode:}}") String shortcode,
+    /**
+     * Own settings, separate from {@code mpesa.*} (which on the server point at the sandbox for older code): the
+     * production Daraja app that has the B2B product (Prod-ASANO, shortcode 4885139) and its API operator.
+     */
+    public DarajaB2bClient(@Value("${mpesa.b2b.consumer-key:}") String consumerKey,
+                           @Value("${mpesa.b2b.consumer-secret:}") String consumerSecret,
+                           @Value("${mpesa.b2b.auth-url:https://api.safaricom.co.ke/oauth/v1/generate}") String authUrl,
+                           @Value("${mpesa.b2b.shortcode:}") String shortcode,
                            @Value("${mpesa.b2b.initiator:}") String initiator,
                            @Value("${mpesa.b2b.security-credential:}") String securityCredential,
                            @Value("${mpesa.b2b.receiver-type:4}") String receiverType,
                            @Value("${mpesa.b2b.url:}") String paymentUrl,
-                           @Value("${smm.till-check.callback-base:}") String callbackBase,
-                           @Value("${mpesa.callback-url:}") String mpesaCallbackUrl) {
-        this.consumerKey = consumerKey;
-        this.consumerSecret = consumerSecret;
-        this.authUrl = authUrl;
-        this.shortcode = shortcode;
-        this.initiator = initiator;
-        this.securityCredential = securityCredential;
-        this.receiverType = receiverType;
-        this.paymentUrl = !paymentUrl.isBlank() ? paymentUrl : origin(authUrl) + "/mpesa/b2b/v1/paymentrequest";
-        this.callbackBase = !callbackBase.isBlank() ? callbackBase : origin(mpesaCallbackUrl) + "/api/v1/smm/till-check";
+                           @Value("${smm.till-check.callback-base:https://tribessystems.co.ke/api/smm/till-check}") String callbackBase) {
+        this.consumerKey = consumerKey.trim();
+        this.consumerSecret = consumerSecret.trim();
+        this.authUrl = authUrl.trim();
+        this.shortcode = shortcode.trim();
+        this.initiator = initiator.trim();
+        this.securityCredential = securityCredential.trim();
+        this.receiverType = receiverType.trim();
+        this.paymentUrl = !paymentUrl.isBlank() ? paymentUrl.trim() : origin(this.authUrl) + "/mpesa/b2b/v1/paymentrequest";
+        this.callbackBase = callbackBase.trim().replaceAll("/+$", "");
     }
 
     /** True when the B2B operator is configured; otherwise our team pays by hand and records it. */
     public boolean enabled() {
         return !initiator.isBlank() && !securityCredential.isBlank() && !shortcode.isBlank()
-                && !consumerKey.isBlank() && !authUrl.isBlank() && !callbackBase.startsWith("/");
+                && !consumerKey.isBlank() && !consumerSecret.isBlank() && !authUrl.isBlank()
+                && callbackBase.startsWith("https://");
     }
 
     /**
