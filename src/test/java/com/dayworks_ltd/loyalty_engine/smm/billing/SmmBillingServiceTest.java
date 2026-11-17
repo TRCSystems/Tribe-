@@ -85,6 +85,51 @@ class SmmBillingServiceTest {
     }
 
     @Test
+    void aReceiptThatLandsJustAfterTheSuccessfulResultIsStillCaptured() {
+        SmmSubscription sub = SmmSubscription.builder().id(1L).merchantId(MERCHANT).plan(SmmPlan.STARTER)
+                .starterPlatform(SocialPlatform.FACEBOOK).status(SmmSubscription.Status.PENDING_PAYMENT).checkoutRequestId("ws_CO_123").build();
+        when(subscriptions.findByMerchantId(MERCHANT)).thenReturn(Optional.of(sub));
+        Map<String, Object> noReceiptYet = new java.util.HashMap<>();
+        noReceiptYet.put("ResultCode", "0");
+        noReceiptYet.put("MpesaReceipt", null);
+        when(restTemplate.postForEntity(eq("http://payments.local/api/v1/payment/check-stk-push-status"), any(), eq(Map.class)))
+                .thenReturn(ResponseEntity.ok(Map.of("status", 200, "data", noReceiptYet)))
+                .thenReturn(ResponseEntity.ok(Map.of("status", 200, "data", Map.of("ResultCode", "0", "MpesaReceipt", "LATE123"))));
+
+        SmmSubscription result = billing.confirmPayment(MERCHANT);
+
+        assertEquals(SmmSubscription.Status.ACTIVE, result.getStatus());
+        assertEquals("LATE123", result.getLastPaymentReference());
+        verify(restTemplate, times(2)).postForEntity(anyString(), any(), eq(Map.class));
+
+        ArgumentCaptor<SmmPayment> recorded = ArgumentCaptor.forClass(SmmPayment.class);
+        verify(payments).save(recorded.capture());
+        assertEquals("LATE123", recorded.getValue().getMpesaReceipt());
+    }
+
+    @Test
+    void aReceiptThatNeverArrivesStillActivatesUsingTheCheckoutIdAsTheReference() {
+        SmmSubscription sub = SmmSubscription.builder().id(1L).merchantId(MERCHANT).plan(SmmPlan.STARTER)
+                .starterPlatform(SocialPlatform.FACEBOOK).status(SmmSubscription.Status.PENDING_PAYMENT).checkoutRequestId("ws_CO_123").build();
+        when(subscriptions.findByMerchantId(MERCHANT)).thenReturn(Optional.of(sub));
+        Map<String, Object> noReceipt = new java.util.HashMap<>();
+        noReceipt.put("ResultCode", "0");
+        noReceipt.put("MpesaReceipt", null);
+        when(restTemplate.postForEntity(eq("http://payments.local/api/v1/payment/check-stk-push-status"), any(), eq(Map.class)))
+                .thenReturn(ResponseEntity.ok(Map.of("status", 200, "data", noReceipt)));
+
+        SmmSubscription result = billing.confirmPayment(MERCHANT);
+
+        assertEquals(SmmSubscription.Status.ACTIVE, result.getStatus());
+        assertEquals("ws_CO_123", result.getLastPaymentReference());
+        verify(restTemplate, times(3)).postForEntity(anyString(), any(), eq(Map.class));
+
+        ArgumentCaptor<SmmPayment> recorded = ArgumentCaptor.forClass(SmmPayment.class);
+        verify(payments).save(recorded.capture());
+        assertNull(recorded.getValue().getMpesaReceipt());
+    }
+
+    @Test
     void confirmingBeforeMpesaConfirmsLeavesItPending() {
         SmmSubscription sub = SmmSubscription.builder().id(1L).merchantId(MERCHANT).plan(SmmPlan.PRO)
                 .status(SmmSubscription.Status.PENDING_PAYMENT).checkoutRequestId("ws_CO_123").build();

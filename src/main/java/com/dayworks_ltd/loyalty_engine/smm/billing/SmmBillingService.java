@@ -115,16 +115,23 @@ public class SmmBillingService {
             throw new IllegalArgumentException("No payment is pending for this merchant");
         }
 
-        Map<String, Object> confirmRequest = Map.of("paymentReference", sub.getCheckoutRequestId());
-        ResponseEntity<Map> response = restTemplate.postForEntity(
-                paymentBaseUrl + "/api/v1/payment/check-stk-push-status", confirmRequest, Map.class);
-
-        if (!isPaymentSuccessful(response.getBody())) {
+        Map<String, Object> response = checkStkPushStatus(sub.getCheckoutRequestId());
+        if (!isPaymentSuccessful(response)) {
             log.info("SokoReply billing: payment not yet confirmed for merchant {}", merchantId);
             return sub;
         }
 
-        String mpesaReceipt = receiptFrom(response.getBody());
+        // Safaricom's callback (which carries the receipt) can land a moment after this very query already
+        // said success. The frontend stops polling the instant we activate the plan, so this is the only
+        // chance to capture it - a couple of short retries almost always catch it; a null receipt after that
+        // is accepted rather than leaving the seller stuck pending for a payment that genuinely went through.
+        String mpesaReceipt = receiptFrom(response);
+        for (int attempt = 0; attempt < 2 && (mpesaReceipt == null || mpesaReceipt.isBlank()); attempt++) {
+            sleep(1000);
+            response = checkStkPushStatus(sub.getCheckoutRequestId());
+            mpesaReceipt = receiptFrom(response);
+        }
+
         LocalDateTime paidAt = LocalDateTime.now();
         LocalDateTime periodEnd = paidAt.plusDays(30);
         sub.setStatus(SmmSubscription.Status.ACTIVE);
@@ -155,6 +162,20 @@ public class SmmBillingService {
             throw new RuntimeException("M-Pesa did not return a payment reference");
         }
         return checkoutRequestId;
+    }
+
+    private Map<String, Object> checkStkPushStatus(String checkoutRequestId) {
+        Map<String, Object> confirmRequest = Map.of("paymentReference", checkoutRequestId);
+        return restTemplate.postForEntity(paymentBaseUrl + "/api/v1/payment/check-stk-push-status", confirmRequest, Map.class)
+                .getBody();
+    }
+
+    private static void sleep(long millis) {
+        try {
+            Thread.sleep(millis);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
     }
 
     @SuppressWarnings("unchecked")
