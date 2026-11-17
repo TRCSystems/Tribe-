@@ -39,6 +39,13 @@ public class SmmBillingController {
         return ok("Subscription", sub.map(this::view).orElse(null));
     }
 
+    @GetMapping("/history")
+    @Operation(summary = "Every payment this shop has made, most recent first")
+    public ResponseEntity<?> history(@AuthenticationPrincipal CustomUserDetails user) {
+        if (user == null || user.getMerchantId() == null) return fail(HttpStatus.BAD_REQUEST, "This user is not linked to any merchant");
+        return ok("Payment history", billing.paymentHistory(user.getMerchantId()));
+    }
+
     public record SubscribeRequest(String plan, String platform, String phoneNumber) {}
 
     @PostMapping("/subscribe")

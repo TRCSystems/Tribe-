@@ -1,9 +1,12 @@
 package com.dayworks_ltd.loyalty_engine.smm.billing;
 
+import com.dayworks_ltd.loyalty_engine.smm.model.SmmPayment;
 import com.dayworks_ltd.loyalty_engine.smm.model.SmmPlan;
 import com.dayworks_ltd.loyalty_engine.smm.model.SmmSubscription;
 import com.dayworks_ltd.loyalty_engine.smm.model.SocialPlatform;
+import com.dayworks_ltd.loyalty_engine.smm.repository.SmmPaymentRepository;
 import com.dayworks_ltd.loyalty_engine.smm.repository.SmmSubscriptionRepository;
+import org.mockito.ArgumentCaptor;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.ResponseEntity;
@@ -26,8 +29,9 @@ class SmmBillingServiceTest {
     static final Long MERCHANT = 23L;
 
     SmmSubscriptionRepository subscriptions = mock(SmmSubscriptionRepository.class);
+    SmmPaymentRepository payments = mock(SmmPaymentRepository.class);
     RestTemplate restTemplate = mock(RestTemplate.class);
-    SmmBillingService billing = new SmmBillingService(subscriptions, restTemplate);
+    SmmBillingService billing = new SmmBillingService(subscriptions, payments, restTemplate);
 
     @BeforeEach
     void setUp() {
@@ -70,6 +74,14 @@ class SmmBillingServiceTest {
         assertNull(result.getCheckoutRequestId());
         assertTrue(result.getCurrentPeriodEnd().isAfter(LocalDateTime.now().plusDays(29)));
         assertTrue(result.isActive());
+
+        ArgumentCaptor<SmmPayment> recorded = ArgumentCaptor.forClass(SmmPayment.class);
+        verify(payments).save(recorded.capture());
+        assertEquals(MERCHANT, recorded.getValue().getMerchantId());
+        assertEquals(SmmPlan.PRO, recorded.getValue().getPlan());
+        assertEquals(0, new BigDecimal("3000").compareTo(recorded.getValue().getAmountKes()));
+        assertEquals("QAB123XYZ", recorded.getValue().getMpesaReceipt());
+        assertEquals(result.getCurrentPeriodEnd(), recorded.getValue().getPeriodEnd());
     }
 
     @Test
@@ -87,6 +99,7 @@ class SmmBillingServiceTest {
 
         assertEquals(SmmSubscription.Status.PENDING_PAYMENT, result.getStatus());
         assertFalse(result.isActive());
+        verifyNoInteractions(payments);
     }
 
     @Test

@@ -1,8 +1,10 @@
 package com.dayworks_ltd.loyalty_engine.smm.billing;
 
+import com.dayworks_ltd.loyalty_engine.smm.model.SmmPayment;
 import com.dayworks_ltd.loyalty_engine.smm.model.SmmPlan;
 import com.dayworks_ltd.loyalty_engine.smm.model.SmmSubscription;
 import com.dayworks_ltd.loyalty_engine.smm.model.SocialPlatform;
+import com.dayworks_ltd.loyalty_engine.smm.repository.SmmPaymentRepository;
 import com.dayworks_ltd.loyalty_engine.smm.repository.SmmSubscriptionRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -28,6 +30,7 @@ import java.util.Set;
 public class SmmBillingService {
 
     private final SmmSubscriptionRepository subscriptions;
+    private final SmmPaymentRepository payments;
     private final RestTemplate restTemplate;
 
     @Value("${payment.base-url}")
@@ -56,6 +59,11 @@ public class SmmBillingService {
 
     public Optional<SmmSubscription> subscriptionFor(Long merchantId) {
         return subscriptions.findByMerchantId(merchantId);
+    }
+
+    /** Every payment this merchant has ever made, most recent first. */
+    public List<SmmPayment> paymentHistory(Long merchantId) {
+        return payments.findByMerchantIdOrderByPaidAtDesc(merchantId);
     }
 
     /** True once the merchant has an unexpired, paid-for subscription. */
@@ -117,13 +125,20 @@ public class SmmBillingService {
         }
 
         String mpesaReceipt = receiptFrom(response.getBody());
+        LocalDateTime paidAt = LocalDateTime.now();
+        LocalDateTime periodEnd = paidAt.plusDays(30);
         sub.setStatus(SmmSubscription.Status.ACTIVE);
         sub.setLastPaymentReference(mpesaReceipt != null ? mpesaReceipt : sub.getCheckoutRequestId());
-        sub.setLastPaymentAt(LocalDateTime.now());
-        sub.setCurrentPeriodEnd(LocalDateTime.now().plusDays(30));
+        sub.setLastPaymentAt(paidAt);
+        sub.setCurrentPeriodEnd(periodEnd);
         sub.setCheckoutRequestId(null);
-        log.info("SokoReply billing: merchant {} activated on {} until {}", merchantId, sub.getPlan(), sub.getCurrentPeriodEnd());
-        return subscriptions.save(sub);
+        SmmSubscription saved = subscriptions.save(sub);
+
+        payments.save(SmmPayment.builder().merchantId(merchantId).plan(saved.getPlan()).amountKes(saved.getPlan().priceKes())
+                .mpesaReceipt(mpesaReceipt).periodStart(paidAt).periodEnd(periodEnd).paidAt(paidAt).build());
+
+        log.info("SokoReply billing: merchant {} activated on {} until {}", merchantId, saved.getPlan(), periodEnd);
+        return saved;
     }
 
     private String initiateStkPush(String phoneNumber, java.math.BigDecimal amount) {
