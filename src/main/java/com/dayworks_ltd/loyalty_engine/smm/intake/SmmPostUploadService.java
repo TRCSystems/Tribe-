@@ -37,6 +37,8 @@ public class SmmPostUploadService {
     /** How long a photo stays waiting for its description before a later, unrelated text is no longer treated as one. */
     static final Duration COLLECTING_WINDOW = Duration.ofHours(2);
     static final int MAX_PHOTOS = 10;
+    /** Said before sending photos, so a stock receipt or till-watermark video isn't mistaken for a post. */
+    static final Set<String> START_WORDS = Set.of("POST", "CHAPISHA");
     static final long MAX_BYTES = 25L * 1024 * 1024;
     static final String AWAITING = "POST";
 
@@ -92,16 +94,20 @@ public class SmmPostUploadService {
         if (account == null) return false;
 
         LocalDateTime now = LocalDateTime.now(SmmIntakeService.NAIROBI);
+        boolean collecting = "POST".equals(seller.getAwaiting()) && seller.getAwaitingSince() != null
+                && seller.getAwaitingSince().isAfter(now.minus(COLLECTING_WINDOW));
         if ("image".equals(type) && message != null && message.get("image") instanceof Map<?, ?> im
                 && ((Map<String, Object>) im).get("id") != null) {
+            // A photo only starts or continues a post once the seller has explicitly said POST first - otherwise
+            // it's left for the till-watermark and stock-receipt flows, which also take seller photos.
+            if (!collecting) return false;
             return collectPhoto(from, seller, String.valueOf(((Map<String, Object>) im).get("id")), now);
         }
         if ("text".equals(type) && content != null && !content.isBlank()) {
             String upper = content.trim().toUpperCase(Locale.ROOT);
             if (upper.equals("TAKE DOWN") || upper.equals("CHUKUA CHINI")) return takeDown(from, seller, account);
             if (upper.startsWith("EDIT:")) return edit(from, seller, account, content.substring(5).trim());
-            boolean collecting = "POST".equals(seller.getAwaiting()) && seller.getAwaitingSince() != null
-                    && seller.getAwaitingSince().isAfter(now.minus(COLLECTING_WINDOW));
+            if (!collecting && START_WORDS.contains(upper)) return startCollecting(from, seller, now);
             if (collecting) {
                 SmmPostDraft draft = drafts.findFirstByMerchantIdAndStatusOrderByIdDesc(seller.getMerchantId(), SmmPostDraft.Status.COLLECTING).orElse(null);
                 if (draft != null && draft.getMediaIds() != null && !draft.getMediaIds().isBlank()) {
@@ -116,6 +122,14 @@ public class SmmPostUploadService {
         return profiles.findAll().stream()
                 .filter(p -> wa.equals(WhatsAppCloudClient.toWaNumber(p.getWhatsappNumber())))
                 .findFirst().orElse(null);
+    }
+
+    private boolean startCollecting(String from, SmmSellerProfile seller, LocalDateTime now) {
+        seller.setAwaiting(AWAITING);
+        seller.setAwaitingSince(now);
+        profiles.save(seller);
+        whatsapp.sendText(from, "📸 Send the photo(s) you want posted, then describe it (price, size, anything buyers should know).");
+        return true;
     }
 
     private boolean collectPhoto(String from, SmmSellerProfile seller, String mediaId, LocalDateTime now) {

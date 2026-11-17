@@ -56,8 +56,32 @@ class SmmPostUploadServiceTest {
     }
 
     @Test
+    void aBarePhotoWithoutThePostCommandIsLeftForOtherHandlers() {
+        when(accounts.findByMerchantId(23L)).thenReturn(List.of(account));
+
+        assertFalse(service.handle(SELLER, "image", "", image("MEDIA1")),
+                "a stock receipt or till-watermark photo must not be swallowed as a post photo");
+
+        assertNull(seller.getAwaiting());
+        verifyNoInteractions(drafts, whatsapp);
+    }
+
+    @Test
+    void sayingPostStartsCollectingWithoutTouchingAnyDraftYet() {
+        when(accounts.findByMerchantId(23L)).thenReturn(List.of(account));
+
+        assertTrue(service.handle(SELLER, "text", "post", null));
+
+        assertEquals("POST", seller.getAwaiting());
+        verifyNoInteractions(drafts);
+        verify(whatsapp).sendText(eq(SELLER), contains("Send the photo"));
+    }
+
+    @Test
     void aFirstPhotoStartsCollectingAndSetsAwaiting() {
         when(accounts.findByMerchantId(23L)).thenReturn(List.of(account));
+        seller.setAwaiting("POST");
+        seller.setAwaitingSince(LocalDateTime.now());
         when(drafts.findFirstByMerchantIdAndStatusOrderByIdDesc(23L, SmmPostDraft.Status.COLLECTING)).thenReturn(Optional.empty());
 
         assertTrue(service.handle(SELLER, "image", "", image("MEDIA1")));
