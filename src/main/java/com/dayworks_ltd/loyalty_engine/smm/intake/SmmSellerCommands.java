@@ -18,7 +18,7 @@ import java.util.*;
  * <ul>
  *   <li>PAUSE / SIMAMISHA and RESUME / ENDELEA: stop or restart the agents' replies (bad comments and phone numbers
  *       are still hidden while paused, since that says nothing in the seller's name).</li>
- *   <li>Called ✅ on a hot-lead alert: those buyers are marked contacted.</li>
+ *   <li>Called on a hot-lead alert: those buyers are marked contacted.</li>
  *   <li>Answer questions: the questions the agents handed over, one at a time. The seller types the answer; it is kept
  *       as an FAQ the agents use from then on (seller memory) and goes to the buyer if their chat is still open.</li>
  *   <li>Check replies: yesterday's replies one at a time, 👍 Good or ✏️ Fix. A fix is the seller's own wording and

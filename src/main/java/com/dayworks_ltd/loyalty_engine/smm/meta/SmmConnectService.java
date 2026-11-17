@@ -34,6 +34,7 @@ public class SmmConnectService {
     private final MetaGraphClient graph;
     private final SmmAccountRepository accounts;
     private final SmmSellerProfileRepository profiles;
+    private final com.dayworks_ltd.loyalty_engine.smm.billing.SmmBillingService billing;
 
     public record Connected(long merchantId, List<String> names, List<String> skipped) {}
 
@@ -123,6 +124,18 @@ public class SmmConnectService {
                 && existing.get().getStatus() != SmmAccount.Status.DISCONNECTED) {
             skipped.add(name + " is connected to another shop");
             return false;
+        }
+        boolean alreadyActiveForThisShop = existing.isPresent() && existing.get().getMerchantId().equals(who.merchantId())
+                && existing.get().getStatus() == SmmAccount.Status.ACTIVE;
+        if (!alreadyActiveForThisShop) {
+            Set<SocialPlatform> connected = new HashSet<>();
+            for (SmmAccount a : accounts.findByMerchantId(who.merchantId())) {
+                if (a.getStatus() == SmmAccount.Status.ACTIVE) connected.add(a.getPlatform());
+            }
+            if (!billing.canConnectPlatform(who.merchantId(), platform, connected)) {
+                skipped.add(name + " needs a SokoReply plan that includes " + platform.name().toLowerCase(java.util.Locale.ROOT));
+                return false;
+            }
         }
         SmmAccount a = existing.orElseGet(() -> SmmAccount.builder().platform(platform).pageId(pageId).build());
         a.setMerchantId(who.merchantId());

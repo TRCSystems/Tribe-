@@ -789,12 +789,51 @@ public class ShopAssistant {
             int qty = clampQty(line.quantity());
             String requested = line.requested() == null ? "item" : line.requested().trim();
             Inventory sure = "high".equalsIgnoreCase(line.confidence()) ? byCode.get(line.itemCode()) : null;
+            if (sure != null) {
+                String wanted = ShoppingListReader.statedSize(requested);
+                String got = ShoppingListReader.statedSize(sure.getItemName());
+                // The model sometimes snaps to the nearest size it has in stock instead of admitting no match;
+                // a stated size that disagrees with the matched product's own size is never trustworthy, whatever its self-reported confidence.
+                if (wanted != null && got != null && !wanted.equals(got)) sure = null;
+            }
+            // Same idea for the brand: a size match against a different brand entirely (Kenya Cane -> Black & White)
+            // is never trustworthy either, however the model scored it. B2B only: groceries routinely match a
+            // generic Swahili or English word to a branded product with no shared word at all ("sukari" -> "Mumias
+            // Sugar"), which this check cannot tell apart from a genuine brand mix-up.
+            boolean checkBrand = b2b();
+            if (sure != null && checkBrand && !plausibleBrandMatch(requested, sure.getItemName())) sure = null;
+
             List<String> options = new ArrayList<>();
-            if (line.itemCode() != null && byCode.containsKey(line.itemCode()) && sure == null) options.add(line.itemCode());
+            if (line.itemCode() != null && byCode.containsKey(line.itemCode()) && sure == null
+                    && (!checkBrand || plausibleBrandMatch(requested, byCode.get(line.itemCode()).getItemName()))) options.add(line.itemCode());
             for (String alt : line.alternatives() == null ? List.<String>of() : line.alternatives()) {
-                if (byCode.containsKey(alt) && !options.contains(alt)) options.add(alt);
+                if (byCode.containsKey(alt) && !options.contains(alt)
+                        && (!checkBrand || plausibleBrandMatch(requested, byCode.get(alt).getItemName()))) options.add(alt);
+            }
+            if (checkBrand && options.isEmpty() && line.itemCode() != null && byCode.containsKey(line.itemCode())) {
+                // The model's own pick and every alternative were a different brand than what was actually asked for;
+                // fall back to a literal search of the catalogue instead of asking the customer to choose among wrong brands.
+                Set<String> wantedBrand = brandWords(requested);
+                if (!wantedBrand.isEmpty()) {
+                    for (Inventory i : catalogue) {
+                        if (!Collections.disjoint(wantedBrand, brandWords(i.getItemName())) && !options.contains(i.getItemCode())) {
+                            options.add(i.getItemCode());
+                        }
+                    }
+                }
             }
             options.removeIf(code -> !orderable(byCode.get(code)));
+            if (sure == null && options.size() > 1) {
+                // The customer may already have said which size they want; if exactly one option is literally that
+                // size, that settles it (other, unrelated-size products of the same brand aren't worth asking about).
+                String wantedSize = ShoppingListReader.statedSize(requested);
+                if (wantedSize != null) {
+                    List<String> sized = options.stream()
+                            .filter(code -> wantedSize.equals(ShoppingListReader.statedSize(byCode.get(code).getItemName())))
+                            .toList();
+                    if (sized.size() == 1) options = new ArrayList<>(sized);
+                }
+            }
 
             if (sure != null) {
                 if (!orderable(sure)) {
@@ -903,7 +942,7 @@ public class ShopAssistant {
     }
 
     private static final Pattern SIZE_WORDS = Pattern.compile(
-            "\\b\\d/\\d\\b|\\b\\d+\\s*(ml|l|ltr|litres?)\\b|\\b(250|330|350|375|500|750|1000)\\b|\\b(can|bottle|tetra|and)\\b",
+            "\\d/\\d\\b|\\b\\d+\\s*(ml|l|ltr|litres?)\\b|\\b(250|330|350|375|500|750|1000)\\b|\\b(can|bottle|tetra|and)\\b",
             Pattern.CASE_INSENSITIVE);
 
     /** "KIBAO 1/4", "KIBAO 1/2" and "KIBAO 3/4" are one product in three sizes; so are "CHROME 3/4" and "CHROME VODKA 1/4". */
@@ -928,6 +967,40 @@ public class ShopAssistant {
 
     /** Words some sizes carry in their name and others don't ("CHROME 3/4" vs "CHROME VODKA 1/4"). */
     private static final Set<String> DRINK_TYPE_WORDS = Set.of("vodka", "gin", "whisky", "whiskey", "brandy", "rum", "wine", "spirit");
+
+    /** Pack words and other non-brand noise that shouldn't count as a brand word. */
+    private static final Set<String> QTY_FILLER = Set.of("x", "pcs", "btl", "bottle", "bottles", "crate", "case", "carton", "ctn", "dozen", "pc", "of", "and",
+            "item", "items", "piece", "pieces", "unit", "units", "qty");
+
+    /**
+     * What's left of a line (the customer's words, or a catalogue product's name) once sizes, quantities and
+     * filler are stripped: "3/4 Kenya cane -2" and "Kenya Cane Lemon & Ginger" both become {kenya, cane}.
+     * Short tokens (abbreviations like "KC") are dropped since there's no safe way to check those without
+     * guessing the brand they stand for.
+     */
+    static Set<String> brandWords(String text) {
+        // The size pattern needs the raw "/" to find a fraction like "1/4"; normalize() would remove it first and,
+        // for a catalogue name with no space before the size ("KC1/4"), leave a bogus token ("kc1") behind.
+        String cleaned = normalize(SIZE_WORDS.matcher(String.valueOf(text)).replaceAll(" "));
+        Set<String> words = new LinkedHashSet<>();
+        for (String w : cleaned.split(" ")) {
+            if (w.length() < 3 || DRINK_TYPE_WORDS.contains(w) || QTY_FILLER.contains(w)) continue;
+            words.add(w);
+        }
+        return words;
+    }
+
+    /**
+     * True when neither side has a recognisable brand word, they share at least one, or one side's words run
+     * together into the other's ("Vice Roy" -> {vice, roy} joins into "viceroy", matching catalogue "VICEROY"):
+     * never a confirmed mismatch.
+     */
+    static boolean plausibleBrandMatch(String requested, String itemName) {
+        Set<String> a = brandWords(requested), b = brandWords(itemName);
+        if (a.isEmpty() || b.isEmpty() || !Collections.disjoint(a, b)) return true;
+        String joinedA = String.join("", a), joinedB = String.join("", b);
+        return joinedA.contains(joinedB) || joinedB.contains(joinedA);
+    }
 
     private void askNextOrShowCart(String from, Merchant store, ShopCart cart) {
         askNextOrShowCart(from, store, cart, null);

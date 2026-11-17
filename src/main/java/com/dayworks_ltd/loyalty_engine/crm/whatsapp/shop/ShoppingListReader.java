@@ -93,7 +93,20 @@ public class ShoppingListReader {
             + "Captain or Captan = Captain Morgan / Captain Gold, Tripple = Triple Ace, Ken extra or Kinextra = Kane Extra, "
             + "White cup = White Cap, Dilemonte = Delmonte, Guiness = Guinness, Gilbys = Gilbeys.\n"
             + "The brand decides the product: never match a brand or abbreviation to a different brand (KC is never Kane Extra or Captain). "
-            + "If that brand has no product in the size asked for, return that brand's products as low-confidence alternatives.";
+            + "If that brand has no product in the size asked for, return that brand's products as low-confidence alternatives. "
+            + "Never change the size the customer stated: if they said 1/2 and the catalogue only has that brand in 1/4 and 3/4, that is "
+            + "not a match, even if one of those is close in price or name — leave itemCode null, confidence low, both sizes as alternatives. "
+            + "Return one line for every product the customer asked for, in the order asked, even ones with confidence \"low\" or \"none\": never leave a requested product out of the reading.";
+
+    /** The liquor size ("1/4", "1/2", "3/4") stated in a brand, request or product name, by the words and numbers in {@link #LIQUOR_NAMES}; null if none is stated. */
+    static String statedSize(String text) {
+        if (text == null) return null;
+        String t = " " + text.toLowerCase(Locale.ROOT).replace("-", " ") + " ";
+        if (t.matches(".*\\b(3/4|750|mzinga|msinga|full|bottle kubwa)\\b.*")) return "3/4";
+        if (t.matches(".*\\b(1/2|375|nusu|nussu|half)\\b.*")) return "1/2";
+        if (t.matches(".*\\b(1/4|250|kota|kwota|kuota|quota|cota|quarter|robo)\\b.*")) return "1/4";
+        return null;
+    }
 
     /** What kind of shop is being ordered from: decides the wording and the product hints Claude gets. */
     public enum Vertical { GROCERY, LIQUOR }

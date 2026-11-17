@@ -50,10 +50,17 @@ public class SmmCommentWorker {
     private final SmmFaqRepository faqs;
     private final SmmLeadAlertService leadAlerts;
     private final SmmOrderLinkService orderLinks;
+    private final SmmCaptionIndexService captionIndex;
 
     /** A viral post is handled at most this many comments a minute; other posts go ahead meanwhile. */
     @Value("${smm.worker.per-post-per-minute:30}")
     private int perPostPerMinute = 30;
+    /**
+     * Links in the first private message. Off by default: a first message from a Page with a link in it tends to land
+     * in the buyer's spam folder. The links go out once the buyer answers (see {@link SmmConversationAgent}).
+     */
+    @Value("${smm.first-dm-links:false}")
+    private boolean firstDmLinks = false;
     private ViralGuard guard;
 
     private synchronized ViralGuard guard() {
@@ -116,6 +123,7 @@ public class SmmCommentWorker {
         // Answered already (by the seller, or the same person said the same thing a moment ago): no second reply,
         // but a phone number or a bad comment is still hidden
         if (Boolean.TRUE.equals(c.getSellerAnswered()) || repeat) plan = alreadyAnswered(plan);
+        if (!firstDmLinks) plan = withoutDmLinks(plan);
 
         // Replies: queued for the sender when the seller is live, otherwise only logged. The Writer puts the
         // planner's facts in the seller's voice (also in shadow mode, so the seller sees what would go out); old
@@ -124,8 +132,9 @@ public class SmmCommentWorker {
         ReplyWriter.Result written = Boolean.TRUE.equals(c.getBackfilled()) || profile.isAgentsPaused()
                 ? new ReplyWriter.Result(plan.publicReply(), plan.privateReply(), null, "planner", null)
                 : writer.write(plan, writerContext(c, reading, profile, account));
-        logReply(c, SmmReply.Kind.PUBLIC, written.publicReply(), status, written);
-        logReply(c, SmmReply.Kind.PRIVATE, written.privateReply(), status, written);
+        logReply(c, SmmReply.Kind.PUBLIC, plain(withDmHint(written.publicReply(), written.privateReply(), reading.language())), status, written);
+        // The Writer knows the shop's WhatsApp link from the shop facts and may put it back: take it out again
+        logReply(c, SmmReply.Kind.PRIVATE, plain(firstDmLinks ? written.privateReply() : withoutLinkLines(written.privateReply())), status, written);
 
         // Protective action, from day one and even when the seller paused the agents: hiding says nothing in their name
         if (plan.hideComment()) hide(c, account);
@@ -143,6 +152,99 @@ public class SmmCommentWorker {
         if (newHotLead) leadAlerts.maybeAlert(c.getMerchantId());
     }
 
+    private static final java.util.regex.Pattern DM_MENTION = java.util.regex.Pattern.compile("(?i)\\b(dm|inbox)\\b");
+
+    /** The first private message without its link lines; the closing question stays. */
+    static Plan withoutDmLinks(Plan plan) {
+        String kept = withoutLinkLines(plan.privateReply());
+        if (Objects.equals(kept, plan.privateReply())) return plan;
+        return new Plan(plan.publicReply(), kept, plan.hideComment(), plan.handover(), plan.demand(), plan.urgent());
+    }
+
+    /** A message without its link lines. One that was only a link is kept whole: better sent than dropped. */
+    static String withoutLinkLines(String dm) {
+        if (dm == null || !CommentReplyPlanner.hasLink(dm)) return dm;
+        String kept = Arrays.stream(dm.split("\n")).filter(line -> !CommentReplyPlanner.hasLink(line))
+                .collect(Collectors.joining("\n")).replaceAll("\n{3,}", "\n\n").strip();
+        return kept.isEmpty() ? dm : kept;
+    }
+
+    /** A first message from a Page often lands under Message requests or Spam: the public reply says where to look. */
+    static String withDmHint(String publicReply, String privateReply, String language) {
+        if (publicReply == null || privateReply == null || !DM_MENTION.matcher(publicReply).find()) return publicReply;
+        return publicReply.strip() + ("sw".equalsIgnoreCase(language)
+                ? " (Angalia Message requests.)"
+                : " (Check Message requests.)");
+    }
+
+    private static final java.util.regex.Pattern EMOJI = java.util.regex.Pattern.compile(
+            "[\\x{1F000}-\\x{1FAFF}\\x{2600}-\\x{27BF}\\x{2B00}-\\x{2BFF}\\x{FE0F}\\x{200D}\\x{20E3}]");
+
+    /** A reply without emojis: plain text reads like a person who is busy selling, not like an advert. */
+    static String plain(String text) {
+        if (text == null) return null;
+        // An emoji standing between two sentences was doing a full stop's job
+        String joined = text.replaceAll("(?<=[\\p{L}\\p{N}])[ \\t]*" + EMOJI.pattern() + "+[ \\t]*(?=\\p{Lu})", ". ");
+        return EMOJI.matcher(joined).replaceAll("").replaceAll("[ \\t]{2,}", " ").replaceAll(" +([.,!?])", "$1")
+                .replaceAll("(?m)[ \\t]+$", "").strip();
+    }
+
+    /** What the chat agent may say for the post a comment was on: the shop, its items and the seller's voice. */
+    record ChatFacts(CommentReplyPlanner.Shop shop, List<Item> items, ReplyWriter.Voice voice) {}
+
+    ChatFacts chatFacts(SmmComment c, SmmSellerProfile p, SmmAccount account) {
+        List<Item> items = itemsOnPost(c);
+        CommentReplyPlanner.Shop shop = shop(p, account, c.getPostId(), items, null);
+        return new ChatFacts(shop, items, voice(c.getMerchantId(), p, shop, captionFor(c, account), c.getPostId()));
+    }
+
+    /** Captions by post, kept an hour: {caption or "", expiry in millis}. */
+    private final Map<String, Object[]> captions = new java.util.concurrent.ConcurrentHashMap<>();
+
+    /**
+     * What the seller wrote on the post the comment is under. Most sellers put the price, sizes and how to order
+     * there and never tag a product, so this is often the only place the answer is.
+     */
+    String captionFor(SmmComment c, SmmAccount account) {
+        if (c.getPostId() == null || account == null || account.getAccessToken() == null) return null;
+        long now = System.currentTimeMillis();
+        Object[] hit = captions.get(c.getPostId());
+        if (hit == null || (long) hit[1] < now) {
+            String caption = null;
+            try {
+                caption = graph.postCaption(c.getPlatform(), c.getPostId(), account.getAccessToken());
+            } catch (Exception e) {
+                log.warn("SokoReply: couldn't read the caption of post {}: {}", c.getPostId(), MetaGraphClient.redact(String.valueOf(e.getMessage())));
+            }
+            hit = new Object[]{caption == null ? "" : caption, now + 3_600_000L};
+            if (captions.size() > 2000) captions.clear();
+            captions.put(c.getPostId(), hit);
+            if (caption != null) captionIndex.indexOnce(c.getMerchantId(), c.getPostId(), caption);
+        }
+        String caption = (String) hit[0];
+        return caption.isEmpty() ? null : caption;
+    }
+
+    private ReplyWriter.Voice voice(Long merchantId, SmmSellerProfile p, CommentReplyPlanner.Shop shop, String caption, String postId) {
+        List<String> faq = faqs.findByMerchantId(merchantId).stream()
+                .sorted(Comparator.comparing(SmmFaq::getId).reversed()).limit(40)
+                .map(f -> f.getQuestion().replace('\n', ' ') + " → " + f.getAnswer().replace('\n', ' ')).toList();
+        StringBuilder facts = new StringBuilder();
+        if (shop.location() != null) facts.append("Location: ").append(shop.location()).append(". ");
+        if (shop.landmark() != null) facts.append("Directions: ").append(shop.landmark()).append(". ");
+        if (shop.hours() != null) facts.append("Open: ").append(shop.hours()).append(". ");
+        if (shop.whatsappLink() != null) facts.append("WhatsApp: ").append(shop.whatsappLink()).append(". ");
+        if (caption != null) {
+            String oneLine = caption.replaceAll("\\s+", " ").strip();
+            facts.append("\nThe caption the seller wrote on this post (its prices, sizes and details are facts about the item in the post): \"")
+                    .append(oneLine.length() > 900 ? oneLine.substring(0, 900) : oneLine).append("\"");
+        }
+        String range = captionIndex.rangeFactsFor(merchantId, postId);
+        if (range != null) facts.append('\n').append(range);
+        return new ReplyWriter.Voice(shop.name(), p.getTone(), p.getVoiceSamples(), p.getNoGoPhrases(),
+                faq, facts.isEmpty() ? null : facts.toString().trim());
+    }
+
     /** What the Writer needs: the comment, the seller's voice and memory, and the latest replies so the angle varies. */
     private ReplyWriter.Context writerContext(SmmComment c, Reading reading, SmmSellerProfile p, SmmAccount account) {
         List<String> faq = faqs.findByMerchantId(c.getMerchantId()).stream()
@@ -155,13 +257,7 @@ public class SmmCommentWorker {
             });
         }
         CommentReplyPlanner.Shop shop = shop(p, account, c.getPostId(), itemsOnPost(c), reading);
-        StringBuilder facts = new StringBuilder();
-        if (shop.location() != null) facts.append("Location: ").append(shop.location()).append(". ");
-        if (shop.landmark() != null) facts.append("Directions: ").append(shop.landmark()).append(". ");
-        if (shop.hours() != null) facts.append("Open: ").append(shop.hours()).append(". ");
-        if (shop.whatsappLink() != null) facts.append("WhatsApp: ").append(shop.whatsappLink()).append(". ");
-        ReplyWriter.Voice voice = new ReplyWriter.Voice(shop.name(), p.getTone(), p.getVoiceSamples(), p.getNoGoPhrases(),
-                faq, facts.isEmpty() ? null : facts.toString().trim());
+        ReplyWriter.Voice voice = voice(c.getMerchantId(), p, shop, captionFor(c, account), c.getPostId());
         String name = c.getCommenterName() == null ? null : c.getCommenterName().split("\\s+")[0];
         return new ReplyWriter.Context(c.getMerchantId(), c.getText(), name, reading.language(),
                 String.valueOf(reading.intent()), voice, recent);

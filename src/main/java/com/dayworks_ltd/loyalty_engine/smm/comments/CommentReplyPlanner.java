@@ -5,6 +5,7 @@ import com.dayworks_ltd.loyalty_engine.smm.comments.CommentReader.Intent;
 import java.math.BigDecimal;
 import java.time.Duration;
 import java.util.*;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
@@ -85,6 +86,17 @@ public final class CommentReplyPlanner {
 
     public static boolean hasPhoneNumber(String text) {
         return text != null && PHONE.matcher(text).find();
+    }
+
+    /** The first phone number in the text, normalised to 2547XXXXXXXX form; null if there is none. */
+    public static String firstPhone(String text) {
+        if (text == null) return null;
+        Matcher m = PHONE.matcher(text);
+        if (!m.find()) return null;
+        String digits = m.group().replaceAll("[\\s-]", "");
+        if (digits.startsWith("+254")) return digits.substring(1);
+        if (digits.startsWith("0")) return "254" + digits.substring(1);
+        return digits;
     }
 
     public static boolean hasLink(String text) {
@@ -226,6 +238,14 @@ public final class CommentReplyPlanner {
                     + whatsappLine(sw, shop, true) + (sw ? "\n\nUngependa nini leo?" : "\n\nWhat would you like today?");
             return new Plan(publicFor(sw, canDm, phone, shop, null), canDm ? dm : null, phone, false, null);
         }
+        if (product.isEmpty() && shop.location() != null && asksLocation(comment)) {
+            // "How much and where are you?" with no product tagged: the location is known, so it is answered now;
+            // the price still needs the item, and the seller is told
+            String pub = phone ? privacyReply(sw, canDm, shop)
+                    : (sw ? "Tuko " : "We're at ") + shop.location() + " 📍"
+                    + (canDm ? (sw ? " Tumekutumia DM 💚" : " We've sent you a DM 💚") : orderLine(sw, shop));
+            return new Plan(pub, canDm ? whereCard(sw, shop, wa) : null, phone, true, null);
+        }
         if (product.isEmpty()) {
             // No product tagged or can't tell which one: a person answers, the buyer still hears back at once
             String dm = sw ? "Habari! Asante kwa kuuliza 💚 Tutumie picha au jina la bidhaa, tutakujibu sasa hivi.\n\nNi bidhaa gani ungependa?"
@@ -357,6 +377,14 @@ public final class CommentReplyPlanner {
     private static String privacyReply(boolean sw, boolean canDm, Shop shop) {
         return sw ? "Asante! Tumeficha namba yako ili iwe salama." + (canDm ? " Tumekutumia DM 💚" : orderLine(true, shop))
                 : "Thanks! We've hidden your number to keep it safe." + (canDm ? " We've sent you a DM 💚" : orderLine(false, shop));
+    }
+
+    private static final java.util.regex.Pattern ASKS_LOCATION = java.util.regex.Pattern.compile(
+            "(?i)\\b(where|located|location|directions?|wapi|mahali|mko\\s+wapi|mnapatikana|shop\\s+iko)\\b");
+
+    /** A question about where the shop is, also when it rides along with another question ("how much and where?"). */
+    static boolean asksLocation(String comment) {
+        return comment != null && ASKS_LOCATION.matcher(comment).find();
     }
 
     /**

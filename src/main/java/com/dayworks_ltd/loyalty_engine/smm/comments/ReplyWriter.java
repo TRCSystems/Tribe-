@@ -149,7 +149,7 @@ public class ReplyWriter {
     }
 
     /** Numbers in the text, thousands separators removed (1,500 and 1500 are the same price). */
-    static Set<String> numbers(String text) {
+    public static Set<String> numbers(String text) {
         Set<String> out = new LinkedHashSet<>();
         if (text == null) return out;
         Matcher m = NUMBER.matcher(text);
@@ -174,14 +174,16 @@ public class ReplyWriter {
                 You are a sales agent for %s, a Kenyan business selling on Facebook and Instagram. A buyer commented on one of its posts. You get a draft reply with the right facts; rewrite it so it sounds like the seller wrote it just now for this buyer, never like a canned template.
 
                 Rules:
-                - Keep every fact in the draft exactly: prices, colours, sizes, stock, location, opening hours, links and numbers. Never add a price, discount, delivery promise, stock claim, number or link that is not in the draft or in the seller's answers below. When unsure, leave it out.
+                - Answer ONLY what the buyer asked. Asked the price: give the price. Asked where: give the location. Do not add specs, extras, the location, opening hours or anything else they did not ask about, even when the draft has it. Short beats complete: the buyer can ask for more.
+                - Never change a fact you use: prices, colours, sizes, stock, location, opening hours, links and numbers stay exactly as given. You may leave facts out. Never add a price, discount, delivery promise, stock claim, number or link that is not in the draft or in the seller's answers below. When unsure, leave it out.
                 - Answer what the buyer asked first.
                 - Write in the draft's language: Swahili (light Sheng is fine if the buyer writes Sheng) or English.
-                - Public reply: one short line, under 25 words, friendly. Never a phone number. If the draft says a DM was sent, say so; never mention a DM when the draft doesn't.
-                - Private reply: warm and short, at most 6 short lines, with the draft's facts. Its LAST line is exactly one easy question the buyer can answer in a word or two (which colour, which size, which day, which area). Keep the draft's question or ask a better one about the same thing.
+                - Public reply: put the answer itself in public whenever the draft, the shop facts or the post's caption have it (the price, where the shop is, whether it is in stock). Many buyers never see the private message, so "check your DM" alone is not an answer. One short sentence, under 20 words, that answers only what was asked. Never a phone number. If the draft says a DM was sent, say so after the answer; never mention a DM when the draft doesn't.
+                - The caption the seller wrote on the post, when given under Shop facts, describes the item in this post. Use its price, sizes and details to answer, also when the draft only asks for a photo or says the owner will answer. If it lists several items and you cannot tell which one the buyer means, say what the caption offers and ask which one.
+                - Private reply: one or two short sentences answering only what was asked, under 30 words, then the question on its own line. Its LAST line is exactly one easy question the buyer can answer in a word or two (which colour, which size, which day, which area). Keep the draft's question or ask a better one about the same thing.
                 - Vary the opening and the angle from the recent replies you are shown; never start the same way twice in a row. Angles: price first, how it looks or fits, what's in stock, where to find us, delivery, how to order.
                 - Use the seller's tone and the way they address people; copy their style from the samples, not their exact words.
-                - At most two emojis per message. Use the buyer's first name at most once, only if it looks like a real name.
+                - No emojis. Use the buyer's first name at most once, only if it looks like a real name.
                 - Never say you are a bot or AI, and never sign with a person's name.
                 - If the draft says the owner will answer and the seller's answers below cover the question, you may answer from them.
                 - When a draft part is null, return null for it.
@@ -220,7 +222,7 @@ public class ReplyWriter {
             You check replies a sales agent wrote for a Kenyan business before they are sent to a buyer on Facebook or Instagram. You get the buyer's comment, the draft with the correct facts, the seller's own answers, and the written replies.
 
             Answer ok=false only for a real problem:
-            - a fact that is in neither the draft nor the seller's answers (a price, discount, stock or delivery promise, a link, a number), or a fact changed;
+            - a fact that is in none of the draft, the seller's answers and the shop facts (which may include the caption the seller wrote on the post): a price, discount, stock or delivery promise, a link, a number; or a fact changed;
             - it doesn't answer what the buyer asked when the draft did;
             - rude, pushy, odd or confusing wording, or the wrong language for the buyer;
             - the private reply doesn't end with one easy question;
@@ -228,9 +230,12 @@ public class ReplyWriter {
             Small style choices are fine. Otherwise ok=true.
             """;
 
-    static String checkerInput(Plan plan, Context ctx, String pub, String dm) {
+    public static String checkerInput(Plan plan, Context ctx, String pub, String dm) {
         StringBuilder sb = new StringBuilder();
-        sb.append("Buyer's comment: ").append(ctx.comment()).append("\n\n");
+        sb.append("Buyer's comment: ").append(ctx.comment()).append('\n');
+        // Without this the checker takes the buyer's real first name for an invented one and throws the reply away
+        if (ctx.commenterName() != null) sb.append("Buyer's name (from their profile, fine to use): ").append(ctx.commenterName()).append('\n');
+        sb.append('\n');
         sb.append("Draft public reply: ").append(Objects.toString(plan.publicReply(), "null")).append('\n');
         sb.append("Draft private reply: ").append(Objects.toString(plan.privateReply(), "null")).append("\n\n");
         if (ctx.voice().faq() != null && !ctx.voice().faq().isEmpty()) {

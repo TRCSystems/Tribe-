@@ -23,7 +23,7 @@ import java.util.Optional;
 /**
  * Listens for buyers' Messenger and Instagram messages and marks the private reply they are answering. Meta allows
  * one private reply per comment, so whether the buyer wrote back is the number that tells us the reply worked (the
- * reply rate). Only the matching happens here; the agents do not answer these messages yet.
+ * reply rate). Each matched message is also passed to {@link SmmConversationAgent}, which answers it.
  */
 @Slf4j
 @Service
@@ -36,6 +36,7 @@ public class SmmMessageTracker {
     private final SmmAccountRepository accounts;
     private final SmmReplyRepository replies;
     private final SmmLeadRepository leads;
+    private final SmmConversationAgent agent;
 
     /** One message from a buyer, pulled out of a webhook. accountId = the Page or Instagram account it was sent to. */
     public record BuyerMessage(SocialPlatform platform, String accountId, String senderId, String messageId, String text, LocalDateTime at) {}
@@ -84,6 +85,7 @@ public class SmmMessageTracker {
         if (reply.isEmpty()) return false; // a message that did not follow one of our private replies
         boolean first = record(reply.get(), m.text(), at);
         replies.save(reply.get());
+        agent.record(reply.get(), m.senderId(), m.messageId(), m.text(), at);
 
         // A buyer who answers the private reply is ready to talk: the seller should see them at the top
         Lead.Platform lp = m.platform() == SocialPlatform.INSTAGRAM ? Lead.Platform.INSTAGRAM : Lead.Platform.FACEBOOK;
@@ -92,6 +94,14 @@ public class SmmMessageTracker {
             lead.setLatestMessage(m.text());
             lead.setLastContactAt(at);
             lead.setMessageCount((lead.getMessageCount() == null ? 0 : lead.getMessageCount()) + 1);
+            // A buyer who gives their number in chat, usually because the agent asked to close the sale
+            if ((lead.getPhoneNumber() == null || lead.getPhoneNumber().isBlank())) {
+                String phone = com.dayworks_ltd.loyalty_engine.smm.comments.CommentReplyPlanner.firstPhone(m.text());
+                if (phone != null) {
+                    lead.setPhoneNumber(phone);
+                    log.info("SokoReply: buyer shared a number in chat for lead {} (merchant {})", lead.getId(), merchantId);
+                }
+            }
             leads.save(lead);
         });
         if (first) log.info("SokoReply: buyer answered private reply {} (merchant {})", reply.get().getId(), merchantId);

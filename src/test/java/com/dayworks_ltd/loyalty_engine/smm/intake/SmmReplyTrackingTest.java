@@ -85,7 +85,7 @@ class SmmReplyTrackingTest {
         Lead lead = Lead.builder().merchantId(23L).senderPsid("PSID9").platform(Lead.Platform.FACEBOOK).temperature(Lead.Temperature.WARM).messageCount(1).build();
         when(leads.findFirstByMerchantIdAndSenderPsidAndPlatform(23L, "PSID9", Lead.Platform.FACEBOOK)).thenReturn(Optional.of(lead));
 
-        SmmMessageTracker tracker = new SmmMessageTracker(accounts, replies, leads);
+        SmmMessageTracker tracker = new SmmMessageTracker(accounts, replies, leads, mock(SmmConversationAgent.class));
         Map<String, Object> payload = messenger("page", "PAGE1", msg("PSID9", "PAGE1", Map.of("mid", "m1", "text", "Black")));
         assertEquals(1, tracker.track(payload));
         assertEquals(0, tracker.track(payload), "a second message is not a second answer");
@@ -97,6 +97,27 @@ class SmmReplyTrackingTest {
     }
 
     @Test
+    void aPhoneNumberTheBuyerGivesInChatIsSavedOnTheLeadOnce() {
+        SmmAccountRepository accounts = mock(SmmAccountRepository.class);
+        SmmReplyRepository replies = mock(SmmReplyRepository.class);
+        SmmLeadRepository leads = mock(SmmLeadRepository.class);
+        when(accounts.findByPlatformAndPageId(SocialPlatform.FACEBOOK, "PAGE1"))
+                .thenReturn(Optional.of(SmmAccount.builder().merchantId(23L).build()));
+        SmmReply sent = SmmReply.builder().id(5L).merchantId(23L).kind(SmmReply.Kind.PRIVATE).status(SmmReply.Status.SENT).recipientId("PSID9").build();
+        when(replies.findFirstByMerchantIdAndKindAndStatusAndRecipientIdAndSentAtAfterOrderBySentAtDesc(
+                eq(23L), eq(SmmReply.Kind.PRIVATE), eq(SmmReply.Status.SENT), eq("PSID9"), any())).thenReturn(Optional.of(sent));
+        Lead lead = Lead.builder().merchantId(23L).senderPsid("PSID9").platform(Lead.Platform.FACEBOOK).temperature(Lead.Temperature.WARM).messageCount(1).build();
+        when(leads.findFirstByMerchantIdAndSenderPsidAndPlatform(23L, "PSID9", Lead.Platform.FACEBOOK)).thenReturn(Optional.of(lead));
+        SmmMessageTracker tracker = new SmmMessageTracker(accounts, replies, leads, mock(SmmConversationAgent.class));
+
+        tracker.track(messenger("page", "PAGE1", msg("PSID9", "PAGE1", Map.of("mid", "m1", "text", "0712345678"))));
+        assertEquals("254712345678", lead.getPhoneNumber());
+
+        tracker.track(messenger("page", "PAGE1", msg("PSID9", "PAGE1", Map.of("mid", "m2", "text", "actually call me on 0798765432"))));
+        assertEquals("254712345678", lead.getPhoneNumber(), "a number already on file is never overwritten");
+    }
+
+    @Test
     void messagesFromStrangersOrUnknownPagesChangeNothing() {
         SmmAccountRepository accounts = mock(SmmAccountRepository.class);
         SmmReplyRepository replies = mock(SmmReplyRepository.class);
@@ -104,7 +125,7 @@ class SmmReplyTrackingTest {
         when(accounts.findByPlatformAndPageId(any(), eq("PAGE1"))).thenReturn(Optional.of(SmmAccount.builder().merchantId(23L).build()));
         when(replies.findFirstByMerchantIdAndKindAndStatusAndRecipientIdAndSentAtAfterOrderBySentAtDesc(any(), any(), any(), any(), any()))
                 .thenReturn(Optional.empty());
-        SmmMessageTracker tracker = new SmmMessageTracker(accounts, replies, leads);
+        SmmMessageTracker tracker = new SmmMessageTracker(accounts, replies, leads, mock(SmmConversationAgent.class));
 
         assertEquals(0, tracker.track(messenger("page", "PAGE1", msg("PSID1", "PAGE1", Map.of("text", "hello")))));
         assertEquals(0, tracker.track(messenger("page", "OTHER", msg("PSID1", "OTHER", Map.of("text", "hello")))));

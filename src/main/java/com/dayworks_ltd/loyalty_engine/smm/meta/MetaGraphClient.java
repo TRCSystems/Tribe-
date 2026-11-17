@@ -225,8 +225,90 @@ public class MetaGraphClient {
         return new SentMessage(str(res.get("recipient_id")), str(res.get("message_id")));
     }
 
+    /**
+     * What the seller wrote on the post: a Facebook post's message, a reel or video's description, an Instagram
+     * post's caption. Null when there is none or it can't be read.
+     */
+    public String postCaption(SocialPlatform platform, String postId, String pageToken) {
+        List<String> fields = platform == SocialPlatform.INSTAGRAM ? List.of("caption") : List.of("message", "description");
+        for (String field : fields) {
+            try {
+                String text = str(get(graph(postId).queryParam("fields", field).queryParam("access_token", pageToken)).get(field));
+                if (text != null && !text.isBlank()) return text.strip();
+            } catch (RuntimeException e) {
+                // a video has no "message" and a post has no "description": try the next one
+            }
+        }
+        return null;
+    }
+
     public static Map<String, String> privateReplyFields(String commentId, String text) {
         return Map.of("recipient", json(Map.of("comment_id", commentId)), "message", json(Map.of("text", text)));
+    }
+
+    // ───────────────────────────── posting a seller's upload ─────────────────────────────
+
+    /**
+     * Uploads one photo to the Page without publishing it yet, so several can be combined into one post. Returns
+     * the photo's ID (Meta calls this field {@code post_id} even though nothing is posted).
+     */
+    public String uploadUnpublishedPhoto(String pageId, byte[] bytes, String filename, String pageToken) {
+        org.springframework.util.LinkedMultiValueMap<String, Object> form = new org.springframework.util.LinkedMultiValueMap<>();
+        form.add("published", "false");
+        form.add("access_token", pageToken);
+        org.springframework.http.HttpHeaders fileHeaders = new org.springframework.http.HttpHeaders();
+        fileHeaders.setContentDisposition(org.springframework.http.ContentDisposition.formData().name("source").filename(filename).build());
+        form.add("source", new HttpEntity<>(bytes, fileHeaders));
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.MULTIPART_FORM_DATA);
+        Map<String, Object> res = exchange(HttpMethod.POST, graph(pageId + "/photos"), new HttpEntity<>(form, headers));
+        return str(res.get("id"));
+    }
+
+    /** One published photo with its own caption: the common case, a seller's single-photo post. */
+    public PostResult postSinglePhoto(String pageId, byte[] bytes, String filename, String caption, String pageToken) {
+        org.springframework.util.LinkedMultiValueMap<String, Object> form = new org.springframework.util.LinkedMultiValueMap<>();
+        form.add("caption", caption);
+        form.add("access_token", pageToken);
+        org.springframework.http.HttpHeaders fileHeaders = new org.springframework.http.HttpHeaders();
+        fileHeaders.setContentDisposition(org.springframework.http.ContentDisposition.formData().name("source").filename(filename).build());
+        form.add("source", new HttpEntity<>(bytes, fileHeaders));
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.MULTIPART_FORM_DATA);
+        Map<String, Object> res = exchange(HttpMethod.POST, graph(pageId + "/photos"), new HttpEntity<>(form, headers));
+        String photoId = str(res.get("post_id") != null ? res.get("post_id") : res.get("id"));
+        return new PostResult(photoId, permalink(photoId, pageToken));
+    }
+
+    /** A Page post made of several already-uploaded, unpublished photos, with one caption. */
+    public PostResult postMultiPhoto(String pageId, List<String> unpublishedPhotoIds, String caption, String pageToken) {
+        List<Map<String, String>> attached = unpublishedPhotoIds.stream().map(id -> Map.of("media_fbid", id)).toList();
+        Map<String, Object> res = postForm(graph(pageId + "/feed"),
+                Map.of("message", caption, "attached_media", json(attached)), pageToken);
+        String postId = str(res.get("id"));
+        return new PostResult(postId, permalink(postId, pageToken));
+    }
+
+    /** What posting one photo, or several, gives back: the post's ID and a link a seller can open and share. */
+    public record PostResult(String postId, String permalinkUrl) {}
+
+    /** Null when Meta won't give a link (rare); the caller falls back to no link rather than failing the post. */
+    public String permalink(String postId, String pageToken) {
+        try {
+            return str(get(graph(postId).queryParam("fields", "permalink_url").queryParam("access_token", pageToken)).get("permalink_url"));
+        } catch (RuntimeException e) {
+            return null;
+        }
+    }
+
+    /** Removes a seller's post entirely ("take it down"). */
+    public void deletePost(String postId, String pageToken) {
+        exchange(HttpMethod.DELETE, graph(postId).queryParam("access_token", pageToken));
+    }
+
+    /** Corrects the caption of a post already live, without removing and remaking it. */
+    public void editPostMessage(String postId, String newCaption, String pageToken) {
+        postForm(graph(postId), Map.of("message", newCaption), pageToken);
     }
 
     private static final com.fasterxml.jackson.databind.ObjectMapper JSON = new com.fasterxml.jackson.databind.ObjectMapper();

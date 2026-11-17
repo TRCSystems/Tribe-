@@ -19,7 +19,7 @@ import java.util.stream.Collectors;
  * A WhatsApp to the seller when a buyer is ready to buy (wants it now, wants to book, or left a phone number), so the
  * seller can call while the buyer is still keen. The agents have already replied; this is the hand-off to a person.
  * At most one alert every 15 minutes per seller: buyers who turn hot in between go out together in the next one.
- * Buttons: "Called ✅" marks them contacted, "Pause agents" stops the agents' replies.
+ * Buttons: "Called" marks them contacted, "Pause agents" stops the agents' replies.
  */
 @Slf4j
 @Service
@@ -97,7 +97,7 @@ public class SmmLeadAlertService {
         return List.of(where, who, want, contact);
     }
 
-    /** What "Called ✅" sends back: the leads it covers. */
+    /** What "Called" sends back: the leads it covers. */
     static String calledPayload(List<Lead> pending) {
         return "SMM_CALLED:" + pending.stream().map(l -> String.valueOf(l.getId())).limit(30).collect(Collectors.joining(","));
     }
@@ -112,7 +112,7 @@ public class SmmLeadAlertService {
         body.put("text", text);
         body.put("example", Map.of("body_text", List.of(List.of("Facebook", "Jane Wanjiru", "black, size 12", "0712345678 (left in a comment, we hid it)"))));
         Map<String, Object> buttons = Map.of("type", "BUTTONS", "buttons", List.of(
-                Map.of("type", "QUICK_REPLY", "text", "Called ✅"),
+                Map.of("type", "QUICK_REPLY", "text", "Called"),
                 Map.of("type", "QUICK_REPLY", "text", "Pause agents")));
         Map<String, Object> def = new LinkedHashMap<>();
         def.put("name", TEMPLATE);
