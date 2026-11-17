@@ -145,10 +145,15 @@ public class SmmBillingService {
     @SuppressWarnings("unchecked")
     private boolean isPaymentSuccessful(Map<String, Object> body) {
         if (body == null) return false;
+        // The envelope's "status" is an int 200; inside "data", ResultCode comes back as the STRING "0" on
+        // success — unlike ResponseCode, which is a number and whose success value isn't reliably "0" once
+        // JSON-deserialized (e.g. 0.0), so ResultCode is what Fresh Mart's own order checkout matches on.
+        Object statusObj = body.get("status");
+        if (!(statusObj instanceof Number) || ((Number) statusObj).intValue() != 200) return false;
         Object dataObj = body.get("data");
         if (!(dataObj instanceof Map)) return false;
-        Object code = ((Map<String, Object>) dataObj).get("ResponseCode");
-        return code != null && "0".equals(String.valueOf(code));
+        Object resultCode = ((Map<String, Object>) dataObj).get("ResultCode");
+        return resultCode != null && "0".equals(resultCode.toString());
     }
 
     @SuppressWarnings("unchecked")

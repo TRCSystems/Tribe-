@@ -60,7 +60,8 @@ class SmmBillingServiceTest {
                 .status(SmmSubscription.Status.PENDING_PAYMENT).checkoutRequestId("ws_CO_123").build();
         when(subscriptions.findByMerchantId(MERCHANT)).thenReturn(Optional.of(sub));
         when(restTemplate.postForEntity(eq("http://payments.local/api/v1/payment/check-stk-push-status"), any(), eq(Map.class)))
-                .thenReturn(ResponseEntity.ok(Map.of("data", Map.of("ResponseCode", "0", "MpesaReceipt", "QAB123XYZ"))));
+                .thenReturn(ResponseEntity.ok(Map.of("status", 200, "message", "Success",
+                        "data", Map.of("ResultCode", "0", "ResponseCode", 0.0, "MpesaReceipt", "QAB123XYZ"))));
 
         SmmSubscription result = billing.confirmPayment(MERCHANT);
 
@@ -76,8 +77,11 @@ class SmmBillingServiceTest {
         SmmSubscription sub = SmmSubscription.builder().id(1L).merchantId(MERCHANT).plan(SmmPlan.PRO)
                 .status(SmmSubscription.Status.PENDING_PAYMENT).checkoutRequestId("ws_CO_123").build();
         when(subscriptions.findByMerchantId(MERCHANT)).thenReturn(Optional.of(sub));
+        Map<String, Object> dataWithNullResultCode = new java.util.HashMap<>();
+        dataWithNullResultCode.put("ResponseCode", -1.0);
+        dataWithNullResultCode.put("ResultCode", null);
         when(restTemplate.postForEntity(anyString(), any(), eq(Map.class)))
-                .thenReturn(ResponseEntity.ok(Map.of("data", Map.of("ResponseCode", "1032"))));
+                .thenReturn(ResponseEntity.ok(Map.of("status", 200, "message", "processing", "data", dataWithNullResultCode)));
 
         SmmSubscription result = billing.confirmPayment(MERCHANT);
 
