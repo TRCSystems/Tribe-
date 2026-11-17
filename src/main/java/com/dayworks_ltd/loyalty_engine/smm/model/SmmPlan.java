@@ -17,7 +17,7 @@ public enum SmmPlan {
     GROWTH(new BigDecimal("1500"), 3, true, true, false),
 
     /** Everything in Growth, plus hiding a seller's contact details from scam replies. */
-    PRO(new BigDecimal("3000"), 3, true, true, true);
+    PRO(new BigDecimal("3500"), 3, true, true, true);
 
     private final BigDecimal priceKes;
     private final int maxPlatforms;

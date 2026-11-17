@@ -79,7 +79,7 @@ class SmmBillingServiceTest {
         verify(payments).save(recorded.capture());
         assertEquals(MERCHANT, recorded.getValue().getMerchantId());
         assertEquals(SmmPlan.PRO, recorded.getValue().getPlan());
-        assertEquals(0, new BigDecimal("3000").compareTo(recorded.getValue().getAmountKes()));
+        assertEquals(0, new BigDecimal("3500").compareTo(recorded.getValue().getAmountKes()));
         assertEquals("QAB123XYZ", recorded.getValue().getMpesaReceipt());
         assertEquals(result.getCurrentPeriodEnd(), recorded.getValue().getPeriodEnd());
     }
